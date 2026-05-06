@@ -93,6 +93,13 @@ function buildComponents(sessionId) {
   return [dayRow1, dayRow2, timeRow];
 }
 
+function getDisplayName(interaction) {
+  if (interaction.member && typeof interaction.member.displayName === "string") {
+    return interaction.member.displayName;
+  }
+  return interaction.user.globalName || interaction.user.username;
+}
+
 function getOrCreateUserData(session, userId, username) {
   if (!session.users.has(userId)) {
     session.users.set(userId, {
@@ -101,41 +108,45 @@ function getOrCreateUserData(session, userId, username) {
       selectedTimes: new Set(),
     });
   }
-  return session.users.get(userId);
+  const userData = session.users.get(userId);
+  userData.username = username;
+  return userData;
 }
 
-function getNamesForDay(session, dayKey) {
-  const names = [];
-  for (const userData of session.users.values()) {
+function getMentionsForDay(session, dayKey) {
+  const mentions = [];
+  for (const [userId, userData] of session.users.entries()) {
     if (userData.selectedDays.has(dayKey)) {
-      names.push(userData.username);
+      mentions.push(`<@${userId}>`);
     }
   }
-  return names;
+  return mentions;
 }
 
-function getNamesForTime(session, time) {
-  const names = [];
-  for (const userData of session.users.values()) {
+function getMentionsForTime(session, time) {
+  const mentions = [];
+  for (const [userId, userData] of session.users.entries()) {
     if (userData.selectedTimes.has(time)) {
-      names.push(userData.username);
+      mentions.push(`<@${userId}>`);
     }
   }
-  return names;
+  return mentions;
 }
 
 function buildDetailText(session) {
   const lines = ["집계 현황표", "", "[요일]"];
   for (const day of DAYS) {
-    const names = getNamesForDay(session, day.key).sort((a, b) => a.localeCompare(b, "ko"));
-    lines.push(`- ${day.label}요일 (${names.length}명): ${names.length > 0 ? names.join(", ") : "없음"}`);
+    const mentions = getMentionsForDay(session, day.key);
+    lines.push(
+      `- ${day.label}요일 (${mentions.length}명): ${mentions.length > 0 ? mentions.join(", ") : "없음"}`
+    );
   }
 
   lines.push("");
   lines.push("[시간]");
   for (const time of TIME_SLOTS) {
-    const names = getNamesForTime(session, time).sort((a, b) => a.localeCompare(b, "ko"));
-    lines.push(`- ${time} (${names.length}명): ${names.length > 0 ? names.join(", ") : "없음"}`);
+    const mentions = getMentionsForTime(session, time);
+    lines.push(`- ${time} (${mentions.length}명): ${mentions.length > 0 ? mentions.join(", ") : "없음"}`);
   }
 
   return lines.join("\n");
@@ -146,17 +157,17 @@ function buildSummaryEmbed(session) {
   let totalSelections = 0;
 
   for (const day of DAYS) {
-    const names = getNamesForDay(session, day.key);
-    totalSelections += names.length;
-    lines.push(`- ${day.label}요일: ${names.length}명`);
+    const mentions = getMentionsForDay(session, day.key);
+    totalSelections += mentions.length;
+    lines.push(`- ${day.label}요일: ${mentions.length}명`);
   }
 
   lines.push("");
   lines.push("## 시간");
   for (const time of TIME_SLOTS) {
-    const names = getNamesForTime(session, time);
-    totalSelections += names.length;
-    lines.push(`- ${time}: ${names.length}명`);
+    const mentions = getMentionsForTime(session, time);
+    totalSelections += mentions.length;
+    lines.push(`- ${time}: ${mentions.length}명`);
   }
 
   const summaryLine = totalSelections > 0 ? `총 선택 수: ${totalSelections}` : "아직 아무도 선택하지 않았어요.";
@@ -220,7 +231,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    const userData = getOrCreateUserData(session, interaction.user.id, interaction.user.username);
+    const userData = getOrCreateUserData(session, interaction.user.id, getDisplayName(interaction));
 
     if (type === "day") {
       if (userData.selectedDays.has(payload)) {
