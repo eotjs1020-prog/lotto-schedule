@@ -170,12 +170,13 @@ function buildSummaryEmbed(session) {
     lines.push(`- ${time}: ${mentions.length}명`);
   }
 
-  const summaryLine = totalSelections > 0 ? `총 선택 수: ${totalSelections}` : "아직 아무도 선택하지 않았어요.";
+  const guideText =
+    "참여 가능하신 요일과 시간을 클릭해 주세요. 일정 선택은 매주 일요일까지 가능하며, 월요일마다 새롭게 리셋됩니다.";
 
   return new EmbedBuilder()
     .setTitle("요일/시간 조율")
     .setDescription(lines.join("\n"))
-    .addFields({ name: "집계", value: summaryLine })
+    .addFields({ name: "안내", value: guideText })
     .setColor(0x5865f2)
     .setFooter({ text: "요일/시간 버튼을 누르면 선택/해제됩니다." });
 }
