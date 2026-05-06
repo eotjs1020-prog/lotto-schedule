@@ -1,4 +1,5 @@
 require("dotenv").config();
+const http = require("http");
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -262,3 +263,16 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 client.login(process.env.DISCORD_TOKEN);
+
+// Render Web Service free tier needs an open port.
+const port = process.env.PORT;
+if (port) {
+  http
+    .createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Bot is running");
+    })
+    .listen(port, () => {
+      console.log(`Health server listening on port ${port}`);
+    });
+}
