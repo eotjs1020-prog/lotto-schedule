@@ -1,2 +1,4 @@
 node_modules
 .env
+user-work-schedule.json
+.schedule-global-cycle-anchor

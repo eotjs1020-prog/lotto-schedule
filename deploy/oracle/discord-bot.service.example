@@ -1,0 +1,24 @@
+# Copy to /etc/systemd/system/discord-bot.service after editing paths and User.
+# sudo cp discord-bot.service.example /etc/systemd/system/discord-bot.service
+# sudo systemctl daemon-reload && sudo systemctl enable --now discord-bot
+#
+# User: ubuntu (Ubuntu image) or opc (Oracle Linux)
+# ExecStart: run `which node` on the server and paste the full path here.
+
+[Unit]
+Description=Discord weekly schedule bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/discord-bot
+Environment=NODE_ENV=production
+# dotenv in the app loads .env from WorkingDirectory — keep secrets there, chmod 600 .env
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
