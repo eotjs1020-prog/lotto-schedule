@@ -1999,7 +1999,14 @@ if (!process.env.DISCORD_TOKEN) {
 
 client.login(process.env.DISCORD_TOKEN);
 
-const { startDashboardIfEnabled } = require("./dashboard/server");
-startDashboardIfEnabled(client, {
-  getActiveSessionCount: () => sessions.size,
-});
+try {
+  const { startDashboardIfEnabled } = require("./dashboard/server");
+  startDashboardIfEnabled(client, {
+    getActiveSessionCount: () => sessions.size,
+  });
+} catch (err) {
+  console.warn(
+    "[dashboard] ./dashboard/server 로드 실패 — 대시보드 없이 봇만 실행합니다. (서버에서 `npm ci` 하면 해결되는 경우가 많습니다.)",
+    err && err.message ? err.message : err
+  );
+}
