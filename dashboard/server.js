@@ -526,15 +526,15 @@ function renderRemoteControlPanel(hasControl, defaultChannelId) {
   return `<article class="embed embed--gray">
 <p class="embed__kicker">관리</p>
 <h2 class="embed__title">원격 제어</h2>
-<p class="embed__desc">채널은 <code>GUILD_ID</code> 길드의 텍스트 채널만 가능합니다. 슬래시 <code>/일정생성</code>·<code>/일정마감</code>·<code>/시트불러오기</code>와 같은 동작입니다.</p>
-${disabledNote}
-<label class="form-label" for="dashCh">채널 ID</label>
-<input id="dashCh" class="inp" type="text" value="${def}" autocomplete="off" spellcheck="false" />
 <label class="form-label" for="dashRefMonth">투표 주 시작 수요일 (선택, 서울 달력)</label>
 <p class="embed__desc" style="margin-top:4px">월을 고른 뒤 수요일 하나를 고르면 그 주가 조율판 <strong>기준·투표 시작</strong>으로 올라갑니다. 월을 비우거나 수요일을 고르지 않으면 지금 시각 기준(기존과 동일)입니다.</p>
 <input type="hidden" id="dashRefWedIso" value="" />
 <input type="month" id="dashRefMonth" class="inp" style="max-width:12rem;margin-top:6px" />
-<div id="dashWedPickRow" class="sched-pill-row" style="margin-top:10px"></div>
+<div id="dashWedPickRow" class="sched-pill-row" style="margin-top:10px;margin-bottom:14px"></div>
+<p class="embed__desc">채널은 <code>GUILD_ID</code> 길드의 텍스트 채널만 가능합니다. 슬래시 <code>/일정생성</code>·<code>/일정마감</code>·<code>/시트불러오기</code>와 같은 동작입니다.</p>
+${disabledNote}
+<label class="form-label" for="dashCh">채널 ID</label>
+<input id="dashCh" class="inp" type="text" value="${def}" autocomplete="off" spellcheck="false" />
 ${buttons}
 <pre id="dashCtlOut" class="dashOut"></pre>
 </article>
