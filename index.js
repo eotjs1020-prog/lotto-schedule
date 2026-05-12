@@ -1158,6 +1158,45 @@ function sessionVoteWindowLabelsMatchSheet(session, startLabel, endLabel) {
   return a === normalizeVoteDateLabel(startLabel) && b === normalizeVoteDateLabel(endLabel);
 }
 
+function normalizePersonLabelForMatch(s) {
+  return String(s ?? "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .normalize("NFKC")
+    .replace(/\u00a0|\u202f/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+/** 괄호 앞·# 앞 별칭 등으로 시트↔디스코드 표시명 비교 */
+function personLabelVariants(label) {
+  const n = normalizePersonLabelForMatch(label);
+  const set = new Set();
+  if (!n) {
+    return set;
+  }
+  set.add(n);
+  const noParen = n.replace(/\s*[\(\[\{].*$/u, "").trim();
+  if (noParen) {
+    set.add(noParen);
+  }
+  const noHash = n.split("#")[0].trim();
+  if (noHash) {
+    set.add(noHash);
+  }
+  return set;
+}
+
+function labelsMatchLoosely(sheetLabel, sessionLabel) {
+  const sheetVars = personLabelVariants(sheetLabel);
+  const sessVars = personLabelVariants(sessionLabel);
+  for (const a of sheetVars) {
+    if (sessVars.has(a)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveSheetParticipantToUserId(displayNameRaw, session) {
   const raw = String(displayNameRaw ?? "").trim();
   if (!raw || raw === "참여자 없음") {
@@ -1178,8 +1217,27 @@ function resolveSheetParticipantToUserId(displayNameRaw, session) {
   if (fromMap != null && /^\d{17,20}$/.test(String(fromMap).trim())) {
     return String(fromMap).trim();
   }
+  const rawVars = personLabelVariants(raw);
+  for (const [key, val] of Object.entries(envMap)) {
+    if (key === raw) {
+      continue;
+    }
+    const keyVars = personLabelVariants(key);
+    for (const rv of rawVars) {
+      if (keyVars.has(rv) && val != null && /^\d{17,20}$/.test(String(val).trim())) {
+        return String(val).trim();
+      }
+    }
+  }
   for (const [uid, ud] of session.users) {
-    if ((ud.username || "").trim() === raw) {
+    const uname = ud.username || "";
+    if (!uname) {
+      continue;
+    }
+    if (uname.trim() === raw) {
+      return uid;
+    }
+    if (labelsMatchLoosely(raw, uname)) {
       return uid;
     }
   }
@@ -1216,7 +1274,9 @@ function dayTimeMapsEqual(a, b) {
   return true;
 }
 
-/** 시트 내용을 세션에 반영. 변경이 있으면 true */
+/** 시트 내용을 세션에 반영.
+ * @returns {{ changed: boolean; blockCount: number; resolvedBlockCount: number; unresolvedNames: string[]; explicitEmpty: boolean }}
+ */
 function applyParsedLiveSheetToSession(session, parsed) {
   if (parsed.explicitEmpty && parsed.blocks.length === 0) {
     let changed = false;
@@ -1227,11 +1287,19 @@ function applyParsedLiveSheetToSession(session, parsed) {
         changed = true;
       }
     }
-    return changed;
+    return {
+      changed,
+      blockCount: 0,
+      resolvedBlockCount: 0,
+      unresolvedNames: [],
+      explicitEmpty: true,
+    };
   }
 
   let changed = false;
   const unresolved = new Set();
+  let resolvedBlockCount = 0;
+  const blockCount = parsed.blocks.length;
 
   for (const block of parsed.blocks) {
     const uid = resolveSheetParticipantToUserId(block.displayName, session);
@@ -1239,6 +1307,7 @@ function applyParsedLiveSheetToSession(session, parsed) {
       unresolved.add(block.displayName);
       continue;
     }
+    resolvedBlockCount += 1;
     const displayName = displayNameForSheetParticipant(block.displayName, uid, session);
     getOrCreateUserData(session, uid, displayName);
     const ud = session.users.get(uid);
@@ -1265,17 +1334,23 @@ function applyParsedLiveSheetToSession(session, parsed) {
     );
   }
 
-  return changed;
+  return {
+    changed,
+    blockCount,
+    resolvedBlockCount,
+    unresolvedNames: [...unresolved],
+    explicitEmpty: false,
+  };
 }
 
 /**
  * GOOGLE_SHEET_LIVE_RANGE 시트를 읽어, 투표 주간이 일치하는 활성 세션의 임베드·버튼을 갱신합니다.
- * @returns {{ matched: number; edited: number; parseError?: string }}
+ * @returns {{ matched: number; edited: number; parseError?: string; noEditDetail?: { changed: boolean; blockCount: number; resolvedBlockCount: number; unresolvedNames: string[]; explicitEmpty: boolean } }}
  */
 async function importLiveSheetToDiscordSessions(client) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   const liveRange = process.env.GOOGLE_SHEET_LIVE_RANGE;
-  const out = { matched: 0, edited: 0, parseError: undefined };
+  const out = { matched: 0, edited: 0, parseError: undefined, noEditDetail: null };
 
   if (!spreadsheetId || !liveRange) {
     out.parseError = "no_sheet_config";
@@ -1353,8 +1428,9 @@ async function importLiveSheetToDiscordSessions(client) {
       continue;
     }
     out.matched += 1;
-    const changed = applyParsedLiveSheetToSession(session, parsed);
-    if (!changed) {
+    const applyResult = applyParsedLiveSheetToSession(session, parsed);
+    if (!applyResult.changed) {
+      out.noEditDetail = applyResult;
       continue;
     }
     try {
@@ -2092,7 +2168,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
           text =
             "시트의 시작일·마감일과 같은 투표 주간을 가진 활성 조율판이 없어요. 첫 참가자 블록의 시작일·마감일이 조율판 임베드의 투표 시작/마감 **같은 날(주)** 인지 확인해 보세요. (셀 서식이 달라도 날짜만 맞으면 인식합니다.)";
         } else if (r.edited === 0) {
-          text = `주간이 맞는 조율판은 ${r.matched}개인데, 변경할 내용이 없거나 시트 표시명을 디스코드 유저와 연결하지 못했어요. SCHEDULE_SHEET_USER_MAP JSON 또는 A열 \`표시명|유저ID\` 형식을 쓰면 됩니다.`;
+          const d = r.noEditDetail;
+          const rawNames = d?.unresolvedNames?.length ? d.unresolvedNames.join(", ") : "";
+          const showNames = rawNames.length > 400 ? `${rawNames.slice(0, 400)}…` : rawNames;
+          if (d && d.blockCount > 0 && d.resolvedBlockCount === 0) {
+            text =
+              `주간이 맞는 조율판은 ${r.matched}개인데, 시트 **참가자 이름(A열)** 을 디스코드 유저와 연결하지 못했어요.\n` +
+              `• A열을 \`표시명|유저스노우플레이크ID\` 형식으로 적거나\n` +
+              `• .env 의 SCHEDULE_SHEET_USER_MAP 에 JSON 으로 \`"시트에 적은 이름": "유저ID"\` 를 넣어 주세요.\n` +
+              (showNames ? `매칭 실패한 A열 값: ${showNames}` : "");
+          } else if (d && d.resolvedBlockCount > 0) {
+            text =
+              `주간이 맞는 조율판 ${r.matched}개에는 **반영할 변경이 없었어요**. 시트의 O/X 가 조율판과 이미 같습니다.` +
+              (d.unresolvedNames?.length
+                ? `\n참고(무시된 행): ${showNames}`
+                : "");
+          } else if (d?.explicitEmpty) {
+            text = `주간이 맞는 조율판 ${r.matched}개: 시트가 "참여자 없음" 이고, 세션에도 이미 선택이 비어 있어 바꿀 게 없었어요.`;
+          } else {
+            text = `주간이 맞는 조율판은 ${r.matched}개인데 디스코드에 반영된 변경이 없어요. 시트에 참가자 블록이 있는지 확인해 주세요.`;
+          }
         } else {
           text = `시트 내용을 ${r.edited}개 조율판 메시지에 반영했어요.`;
         }
