@@ -405,9 +405,50 @@ function getStaticBlockedDayKeysFromEnvAndJson() {
   return merged;
 }
 
+/** 세션에만 붙는 관리자 지정 빨간(잠금) 요일 — 전역 주기·.env·JSON과 합산 */
+function getSessionManualLockedDayKeysSet(session) {
+  if (!session.manualLockedDayKeys) {
+    session.manualLockedDayKeys = new Set();
+  } else if (!(session.manualLockedDayKeys instanceof Set)) {
+    const arr = Array.isArray(session.manualLockedDayKeys) ? session.manualLockedDayKeys : [];
+    session.manualLockedDayKeys = new Set(
+      arr.map((k) => String(k).toUpperCase()).filter((k) => VALID_DAY_KEYS.has(k))
+    );
+  }
+  return session.manualLockedDayKeys;
+}
+
+/** "MON,WED" "월,수" "월 화" 등 → MON..SUN 집합 */
+function parseAdminScheduleDayKeysInput(raw) {
+  const out = new Set();
+  if (raw === undefined || raw === null || !String(raw).trim()) {
+    return out;
+  }
+  const labelToKey = Object.fromEntries(DAYS.map((d) => [d.label, d.key]));
+  const parts = String(raw)
+    .split(/[\s,，、]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (let part of parts) {
+    part = part.replace(/요일$/u, "");
+    const upper = part.toUpperCase();
+    if (VALID_DAY_KEYS.has(upper)) {
+      out.add(upper);
+      continue;
+    }
+    if (labelToKey[part]) {
+      out.add(labelToKey[part]);
+    }
+  }
+  return out;
+}
+
 function getMergedBlockedDayKeysForSession(session) {
   const merged = new Set(getStaticBlockedDayKeysFromEnvAndJson());
   for (const k of computeCycleBlockedWeekdayKeysForSession(session)) {
+    merged.add(k);
+  }
+  for (const k of getSessionManualLockedDayKeysSet(session)) {
     merged.add(k);
   }
   return merged;
@@ -508,6 +549,52 @@ const commands = [
     .setDescription("현재 채널의 최신 조율판을 즉시 마감하고 집계를 확정합니다.")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
+    .setName("조율요일잠금")
+    .setDescription(
+      "현재 채널 최신 조율판에 빨간(선택 불가) 요일을 관리자가 직접 지정합니다. 전역 주기·시트 잠금과 합쳐집니다."
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((option) =>
+      option
+        .setName("동작")
+        .setDescription("추가·제거·설정(덮어쓰기)·초기화 중 하나")
+        .setRequired(true)
+        .addChoices(
+          { name: "추가", value: "add" },
+          { name: "제거", value: "remove" },
+          { name: "설정", value: "set" },
+          { name: "초기화", value: "clear" }
+        )
+    )
+    .addStringOption((option) =>
+      option
+        .setName("요일")
+        .setDescription("MON,WED 또는 월,수 — 초기화일 때는 비워도 됩니다.")
+        .setRequired(false)
+    ),
+  new SlashCommandBuilder()
+    .setName("schedule_lock_days")
+    .setDescription("Admin: add/remove/set/clear red (locked) weekday buttons on the latest schedule in this channel.")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((option) =>
+      option
+        .setName("action")
+        .setDescription("add | remove | set (replace) | clear")
+        .setRequired(true)
+        .addChoices(
+          { name: "add", value: "add" },
+          { name: "remove", value: "remove" },
+          { name: "set", value: "set" },
+          { name: "clear", value: "clear" }
+        )
+    )
+    .addStringOption((option) =>
+      option
+        .setName("days")
+        .setDescription("MON,WED or comma-separated. Omit for clear.")
+        .setRequired(false)
+    ),
+  new SlashCommandBuilder()
     .setName("시트불러오기")
     .setDescription(
       "실시간 Google 시트(GOOGLE_SHEET_LIVE_RANGE)를 읽어 같은 투표 주간의 조율판 임베드를 갱신합니다."
@@ -573,6 +660,7 @@ function registerSession(createdBy, channelId = null, options = {}) {
     messageId: null,
     createdAt,
     priorWeekVoteWindow: options.priorWeekVoteWindow === true,
+    manualLockedDayKeys: new Set(),
   };
   sessions.set(sessionId, session);
   return { sessionId, session };
@@ -1335,6 +1423,26 @@ function findLatestSessionInChannel(channelId) {
   return latestSession;
 }
 
+async function refreshScheduleBoardMessage(client, session) {
+  if (!session?.messageId || !session?.channelId) {
+    return;
+  }
+  try {
+    const channel = await client.channels.fetch(session.channelId);
+    if (!channel || !channel.isTextBased()) {
+      return;
+    }
+    const msg = await channel.messages.fetch(session.messageId);
+    await msg.edit({
+      embeds: [buildSummaryEmbed(session)],
+      components: buildComponents(session.id, session),
+    });
+    scheduleLiveSheetSync(session);
+  } catch (error) {
+    console.warn("[조율판 갱신] 메시지 수정 실패:", session.id, error?.message || error);
+  }
+}
+
 async function closeSessionAndPublishSummary(client, session, logPrefix = "[마감]") {
   const { id: sessionId, channelId: chId, messageId } = session;
   const embed = buildClosedSummaryEmbed(session);
@@ -1614,6 +1722,18 @@ function buildSummaryEmbed(session) {
       `마감 ${formatIsoYmdForBoard(voteEndIso)}`
   );
   head.push("");
+  const manualLocked = getSessionManualLockedDayKeysSet(session);
+  if (manualLocked.size > 0) {
+    const lockLabels = [...manualLocked]
+      .sort()
+      .map((k) => {
+        const meta = DAYS.find((d) => d.key === k);
+        return meta ? `${meta.label}요일` : k;
+      })
+      .join(", ");
+    head.push(`**관리자 잠금 요일** (빨간 버튼)\n${lockLabels}`);
+    head.push("");
+  }
   head.push(`**안내**\n${guideText}`);
   head.push("");
   const description = [...head, ...lines].join("\n");
@@ -1892,6 +2012,91 @@ client.on(Events.InteractionCreate, async (interaction) => {
           /* interaction may already be invalid */
         }
       }
+      return;
+    }
+
+    if (
+      interaction.commandName === "조율요일잠금" ||
+      interaction.commandName === "schedule_lock_days"
+    ) {
+      if (!interactionMemberIsAdministrator(interaction)) {
+        await interaction.reply({
+          content: "이 명령어는 서버 관리자만 사용할 수 있어요.",
+          ephemeral: true,
+        });
+        return;
+      }
+      const latest = findLatestSessionInChannel(interaction.channelId);
+      if (!latest) {
+        await interaction.reply({
+          content:
+            "이 채널에 활성 조율판이 없어요. 먼저 /일정생성 또는 /일정생성특수로 조율판을 만든 뒤 다시 시도해 주세요.",
+          ephemeral: true,
+        });
+        return;
+      }
+      const action =
+        interaction.commandName === "조율요일잠금"
+          ? interaction.options.getString("동작", true)
+          : interaction.options.getString("action", true);
+      const rawDays =
+        interaction.commandName === "조율요일잠금"
+          ? interaction.options.getString("요일")
+          : interaction.options.getString("days");
+      const parsed = parseAdminScheduleDayKeysInput(rawDays ?? "");
+      const lockSet = getSessionManualLockedDayKeysSet(latest);
+
+      if (action === "clear") {
+        lockSet.clear();
+      } else if (action === "set") {
+        if (parsed.size === 0) {
+          await interaction.reply({
+            content: "설정(덮어쓰기)에는 요일을 한 개 이상 넣어 주세요. 예: `월,수` 또는 `MON,WED`",
+            ephemeral: true,
+          });
+          return;
+        }
+        lockSet.clear();
+        for (const k of parsed) {
+          lockSet.add(k);
+        }
+      } else if (action === "add") {
+        if (parsed.size === 0) {
+          await interaction.reply({
+            content: "추가할 요일을 넣어 주세요. 예: `금` 또는 `FRI`",
+            ephemeral: true,
+          });
+          return;
+        }
+        for (const k of parsed) {
+          lockSet.add(k);
+        }
+      } else if (action === "remove") {
+        if (parsed.size === 0) {
+          await interaction.reply({
+            content: "제거할 요일을 넣어 주세요.",
+            ephemeral: true,
+          });
+          return;
+        }
+        for (const k of parsed) {
+          lockSet.delete(k);
+        }
+      }
+
+      await refreshScheduleBoardMessage(interaction.client, latest);
+
+      const summary = [...lockSet]
+        .sort()
+        .map((k) => {
+          const meta = DAYS.find((d) => d.key === k);
+          return meta ? `${meta.label}요일` : k;
+        })
+        .join(", ");
+      await interaction.reply({
+        content: `조율판 버튼을 갱신했어요.\n현재 관리자 잠금: ${summary || "없음"}`,
+        ephemeral: true,
+      });
       return;
     }
 
