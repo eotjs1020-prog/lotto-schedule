@@ -91,10 +91,63 @@ function userIsGuildAdministratorIn(guilds, guildId) {
   }
 }
 
+function dayKeyToKoreanLabel(key) {
+  const map = { MON: "월", TUE: "화", WED: "수", THU: "목", FRI: "금", SAT: "토", SUN: "일" };
+  return map[key] || key;
+}
+
+function renderBoardsSection(snapshot) {
+  if (snapshot && snapshot.error) {
+    return `<p class="warn"><strong>스냅샷 오류:</strong> ${escapeHtml(String(snapshot.error))}</p>`;
+  }
+  if (!snapshot || !Array.isArray(snapshot.boards)) {
+    return "<p><em>조율판 스냅샷을 불러오지 못했어요.</em></p>";
+  }
+  if (snapshot.boards.length === 0) {
+    return "<p><em>메시지가 있는 활성 조율판이 없어요. (세션은 있어도 아직 게시 전일 수 있음)</em></p>";
+  }
+  const rows = snapshot.boards
+    .map((b) => {
+      const mode = b.priorWeek ? "특수(+7)" : "기본(+14)";
+      const locks =
+        b.manualLockedKeys && b.manualLockedKeys.length > 0
+          ? b.manualLockedKeys.map(dayKeyToKoreanLabel).join(", ")
+          : "—";
+      return `<tr>
+  <td><code>${escapeHtml(String(b.channelId))}</code></td>
+  <td>${escapeHtml(b.voteStartIso)} ~ ${escapeHtml(b.voteEndIso)}</td>
+  <td>${escapeHtml(mode)}</td>
+  <td>${escapeHtml(locks)}</td>
+</tr>`;
+    })
+    .join("\n");
+  return `<h2>활성 조율판</h2>
+<table class="boards">
+  <thead><tr><th>채널 ID</th><th>투표 기간(ISO)</th><th>모드</th><th>관리자 잠금</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>`;
+}
+
+function renderFeaturesRow(snapshot) {
+  if (!snapshot || !snapshot.features) {
+    return "";
+  }
+  const f = snapshot.features;
+  const cron = f.scheduleCron ? "켜짐" : "꺼짐";
+  const live = f.sheetsLive ? "켜짐" : "꺼짐";
+  const slash = f.guildSlash ? "길드 등록" : "전역(느림)";
+  return `<tr><th>주간 크론</th><td>${escapeHtml(cron)}</td></tr>
+    <tr><th>실시간 시트</th><td>${escapeHtml(live)}</td></tr>
+    <tr><th>슬래시 등록</th><td>${escapeHtml(slash)}</td></tr>`;
+}
+
 /**
  * DASHBOARD_ENABLE=1 일 때 OAuth + 길드 관리자 전용 상태 페이지.
  * @param {import("discord.js").Client} discordClient
- * @param {{ getActiveSessionCount?: () => number }} [options]
+ * @param {{
+ *   getActiveSessionCount?: () => number;
+ *   getDashboardSnapshot?: () => Record<string, unknown>;
+ * }} [options]
  */
 function startDashboardIfEnabled(discordClient, options = {}) {
   if (!isDashboardEnabled()) {
@@ -107,6 +160,8 @@ function startDashboardIfEnabled(discordClient, options = {}) {
 
   const getActiveSessionCount =
     typeof options.getActiveSessionCount === "function" ? options.getActiveSessionCount : null;
+  const getDashboardSnapshot =
+    typeof options.getDashboardSnapshot === "function" ? options.getDashboardSnapshot : null;
 
   const clientSecret = process.env.DISCORD_CLIENT_SECRET;
   const redirectUri = process.env.DASHBOARD_OAUTH_REDIRECT_URI;
@@ -222,6 +277,33 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     });
   });
 
+  app.get("/dashboard/api/snapshot.json", (req, res) => {
+    const du = req.session.dashboardUser;
+    if (!du || !du.id) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    let snapshot = null;
+    try {
+      snapshot = getDashboardSnapshot ? getDashboardSnapshot() : null;
+    } catch (e) {
+      res.status(500).json({ error: String(e && e.message) });
+      return;
+    }
+    const ready = discordClient.isReady();
+    res.json({
+      loggedInAs: { id: du.id, username: du.username, global_name: du.global_name },
+      bot: {
+        ready,
+        tag: ready && discordClient.user ? discordClient.user.tag : null,
+        uptimeMs: ready ? discordClient.uptime : null,
+        pingMs: ready ? discordClient.ws.ping : null,
+      },
+      guildId,
+      snapshot,
+    });
+  });
+
   app.get("/dashboard", (req, res) => {
     const du = req.session.dashboardUser;
     if (!du || !du.id) {
@@ -234,6 +316,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     const guild = ready ? discordClient.guilds.cache.get(guildId) : null;
     const guildName = guild ? guild.name : "(캐시 없음 — 봇이 길드에 없을 수 있음)";
     const uptimeSec = ready && discordClient.uptime != null ? Math.floor(discordClient.uptime / 1000) : 0;
+    const pingMs = ready ? discordClient.ws.ping : null;
     let sessionCount;
     try {
       sessionCount = getActiveSessionCount ? getActiveSessionCount() : undefined;
@@ -241,45 +324,86 @@ function startDashboardIfEnabled(discordClient, options = {}) {
       sessionCount = undefined;
     }
 
+    let snapshot = null;
+    try {
+      snapshot = getDashboardSnapshot ? getDashboardSnapshot() : null;
+    } catch (e) {
+      snapshot = { error: String(e && e.message), boards: [], features: {} };
+    }
+
     const displayName = du.global_name || du.username || du.id;
     const extraSessions =
       typeof sessionCount === "number"
-        ? `<tr><th>활성 조율 세션</th><td>${escapeHtml(String(sessionCount))}</td></tr>`
+        ? `<tr><th>활성 세션 수</th><td><code>${escapeHtml(String(sessionCount))}</code> <span class="muted">(맵 전체)</span></td></tr>`
         : "";
+    const featuresHtml = renderFeaturesRow(snapshot);
+    const boardsHtml = renderBoardsSection(snapshot);
 
     res.type("text/html; charset=utf-8").send(`<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>봇 상태</title>
+  <title>조율 봇 · 대시보드</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.25rem; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; }
-    th { width: 11rem; color: #444; }
-    a { color: #5865f2; }
+    :root { --bg: #313338; --card: #2b2d31; --text: #f2f3f5; --muted: #949ba4; --link: #00a8fc; --border: #1e1f22; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; min-height: 100vh; }
+    .wrap { max-width: 52rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+    header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0; }
+    nav a { color: var(--link); margin-left: 1rem; white-space: nowrap; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.8rem; margin: 0 0 0.75rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+    table.meta { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+    table.meta th, table.meta td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    table.meta th { width: 11rem; color: var(--muted); font-weight: 500; }
+    table.boards { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+    table.boards th, table.boards td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--border); }
+    table.boards thead th { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: .04em; }
+    code { font-size: 0.85em; background: #111214; padding: 0.12em 0.4em; border-radius: 4px; }
+    a { color: var(--link); }
+    .muted { color: var(--muted); font-size: 0.88rem; }
+    .warn { color: #f23f43; }
   </style>
 </head>
 <body>
-  <h1>디스코드 봇 · 상태 (1단계)</h1>
-  <p>로그인: <strong>${escapeHtml(displayName)}</strong> · <a href="/dashboard/logout">로그아웃</a></p>
-  <table>
-    <tr><th>봇</th><td>${escapeHtml(tag)}</td></tr>
-    <tr><th>준비 상태</th><td>${ready ? "준비됨" : "아직 연결 중"}</td></tr>
-    <tr><th>가동 시간(초)</th><td>${escapeHtml(String(uptimeSec))}</td></tr>
-    <tr><th>대상 길드 ID</th><td><code>${escapeHtml(guildId)}</code></td></tr>
-    <tr><th>길드 이름(캐시)</th><td>${escapeHtml(guildName)}</td></tr>
-    ${extraSessions}
-  </table>
+  <div class="wrap">
+    <header>
+      <h1>조율 봇 · 대시보드</h1>
+      <nav>
+        <span class="muted">${escapeHtml(displayName)}</span>
+        <a href="/dashboard/api/snapshot.json" target="_blank" rel="noopener">JSON</a>
+        <a href="/dashboard/logout">로그아웃</a>
+      </nav>
+    </header>
+
+    <div class="card">
+      <h2>봇 / 길드</h2>
+      <table class="meta">
+        <tr><th>봇</th><td>${escapeHtml(tag)}</td></tr>
+        <tr><th>준비</th><td>${ready ? "준비됨" : "연결 중"}</td></tr>
+        <tr><th>가동(초)</th><td>${escapeHtml(String(uptimeSec))}</td></tr>
+        <tr><th>WebSocket 핑</th><td>${pingMs != null ? escapeHtml(String(pingMs)) + " ms" : "—"}</td></tr>
+        <tr><th>길드 ID</th><td><code>${escapeHtml(guildId)}</code></td></tr>
+        <tr><th>길드 이름</th><td>${escapeHtml(guildName)}</td></tr>
+        ${extraSessions}
+        ${featuresHtml}
+      </table>
+    </div>
+
+    <div class="card">
+      ${boardsHtml}
+    </div>
+
+    <p class="muted">OAuth 로그인한 계정은 <code>GUILD_ID</code> 길드에서 Administrator 여야 합니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
+  </div>
 </body>
 </html>`);
   });
 
   app.listen(listenPort, () => {
     console.log(
-      `[dashboard] ${listenPort} 포트에서 대기 중 — 로그인: http://localhost:${listenPort}/dashboard/login (배포 시 공개 URL로 접속)`
+      `[dashboard] ${listenPort} 포트 — HTML: /dashboard (로그인 /dashboard/login) · JSON: /dashboard/api/snapshot.json`
     );
   });
 }

@@ -2290,12 +2290,42 @@ if (!process.env.DISCORD_TOKEN) {
   process.exit(1);
 }
 
+function getDashboardSnapshot() {
+  const boards = [];
+  for (const session of sessions.values()) {
+    if (!session.messageId) {
+      continue;
+    }
+    const src = session.createdAt ? session : { ...session, createdAt: Date.now() };
+    const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(src);
+    boards.push({
+      channelId: session.channelId,
+      createdAt: session.createdAt,
+      voteStartIso,
+      voteEndIso,
+      priorWeek: session.priorWeekVoteWindow === true,
+      manualLockedKeys: [...getSessionManualLockedDayKeysSet(session)].sort(),
+    });
+  }
+  boards.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  return {
+    activeSessionCount: sessions.size,
+    boards,
+    features: {
+      scheduleCron: Boolean(process.env.SCHEDULE_CHANNEL_ID),
+      sheetsLive: Boolean(process.env.GOOGLE_SPREADSHEET_ID && process.env.GOOGLE_SHEET_LIVE_RANGE),
+      guildSlash: Boolean(process.env.GUILD_ID),
+    },
+  };
+}
+
 client.login(process.env.DISCORD_TOKEN);
 
 try {
   const { startDashboardIfEnabled } = require("./dashboard/server");
   startDashboardIfEnabled(client, {
     getActiveSessionCount: () => sessions.size,
+    getDashboardSnapshot,
   });
 } catch (err) {
   console.warn(
