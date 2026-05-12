@@ -919,8 +919,81 @@ function normalizeVoteDateLabel(s) {
   return String(s ?? "")
     .replace(/^\uFEFF/, "")
     .trim()
+    .replace(/\u00a0|\u202f/g, " ")
     .replace(/\s+/g, " ")
     .normalize("NFKC");
+}
+
+function pad2(n) {
+  return String(Math.trunc(n)).padStart(2, "0");
+}
+
+/**
+ * 시트 시작일·마감일 셀(한국어 표시, ISO 문자열, 스프레드시트 날짜 숫자 등)을
+ * `getVoteWindowIsoForSession` 과 같은 **Asia/Seoul 달력 `YYYY-MM-DD`** 로 맞춤.
+ */
+function coerceSheetDateCellToIsoYmd(cell) {
+  if (cell === undefined || cell === null || cell === "") {
+    return null;
+  }
+  if (typeof cell === "number" && Number.isFinite(cell)) {
+    const whole = Math.trunc(cell);
+    if (whole < 20000 || whole > 100000) {
+      return null;
+    }
+    const epochMs = Date.UTC(1899, 11, 30);
+    const ms = epochMs + whole * 86400000;
+    return formatCalendarDateInTz(ms, SCHEDULE_TZ);
+  }
+
+  let s = String(cell)
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/\u00a0|\u202f/g, " ")
+    .normalize("NFKC");
+  if (!s) {
+    return null;
+  }
+
+  const isoTight = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoTight) {
+    return `${isoTight[1]}-${isoTight[2]}-${isoTight[3]}`;
+  }
+
+  const western = s.match(/^(\d{4})[.\s/~-]+(\d{1,2})[.\s/~-]+(\d{1,2})\b/);
+  if (western) {
+    const y = Number(western[1]);
+    const mo = Number(western[2]);
+    const d = Number(western[3]);
+    if (y >= 1900 && y <= 2100 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${pad2(mo)}-${pad2(d)}`;
+    }
+  }
+
+  const kr = s.match(/(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/);
+  if (kr) {
+    const y = Number(kr[1]);
+    const mo = Number(kr[2]);
+    const d = Number(kr[3]);
+    if (y >= 1900 && y <= 2100 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${y}-${pad2(mo)}-${pad2(d)}`;
+    }
+  }
+
+  const onlyNum = s.replace(/,/g, ".").match(/^(\d+)(?:\.(\d+))?$/);
+  if (onlyNum && !s.includes("-") && !s.includes("년")) {
+    const serial = Number.parseFloat(onlyNum[0]);
+    if (Number.isFinite(serial)) {
+      const whole = Math.trunc(serial);
+      if (whole >= 20000 && whole <= 100000) {
+        const epochMs = Date.UTC(1899, 11, 30);
+        const ms = epochMs + whole * 86400000;
+        return formatCalendarDateInTz(ms, SCHEDULE_TZ);
+      }
+    }
+  }
+
+  return null;
 }
 
 function isSheetMarkO(cell) {
@@ -1075,6 +1148,11 @@ function parseLiveSheetValuesToParticipants(values) {
 function sessionVoteWindowLabelsMatchSheet(session, startLabel, endLabel) {
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
+  const sheetStartIso = coerceSheetDateCellToIsoYmd(startLabel);
+  const sheetEndIso = coerceSheetDateCellToIsoYmd(endLabel);
+  if (sheetStartIso && sheetEndIso) {
+    return sheetStartIso === voteStartIso && sheetEndIso === voteEndIso;
+  }
   const a = normalizeVoteDateLabel(formatIsoYmdForBoard(voteStartIso));
   const b = normalizeVoteDateLabel(formatIsoYmdForBoard(voteEndIso));
   return a === normalizeVoteDateLabel(startLabel) && b === normalizeVoteDateLabel(endLabel);
@@ -1249,16 +1327,20 @@ async function importLiveSheetToDiscordSessions(client) {
       const sample = sessionsWithBoard[0];
       const src = sample.createdAt ? sample : { ...sample, createdAt: Date.now() };
       const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(src);
+      const coS = coerceSheetDateCellToIsoYmd(parsed.startLabel);
+      const coE = coerceSheetDateCellToIsoYmd(parsed.endLabel);
       console.warn(
         "[실시간시트→디스코드] 시트 시작/마감일과 조율판 세션이 안 맞음. 시트:",
         parsed.startLabel,
         "|",
         parsed.endLabel,
+        coS && coE ? `(ISO ${coS} ~ ${coE})` : "(ISO로 해석 불가 — 셀 서식·표기 확인)",
         "→ 세션(첫 예시):",
         formatIsoYmdForBoard(voteStartIso),
         "|",
         formatIsoYmdForBoard(voteEndIso),
-        "(첫 참가자 행의 시작일·마감일 셀을 조율판과 동일하게 맞추세요.)"
+        `(${voteStartIso} ~ ${voteEndIso})`,
+        "첫 참가자 행의 시작일·마감일을 조율판 투표 주와 같게 맞추세요."
       );
     }
   }
@@ -2008,7 +2090,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           text = "시트 형식을 해석하지 못했어요. 봇이 쓰는 표(참여자/시작일/마감일/시간/요일 열)와 같은지 확인해 주세요.";
         } else if (r.matched === 0) {
           text =
-            "시트의 시작일·마감일과 같은 투표 주간을 가진 활성 조율판이 없어요. (다른 주간 시트이거나 조율판이 없을 수 있어요.)";
+            "시트의 시작일·마감일과 같은 투표 주간을 가진 활성 조율판이 없어요. 첫 참가자 블록의 시작일·마감일이 조율판 임베드의 투표 시작/마감 **같은 날(주)** 인지 확인해 보세요. (셀 서식이 달라도 날짜만 맞으면 인식합니다.)";
         } else if (r.edited === 0) {
           text = `주간이 맞는 조율판은 ${r.matched}개인데, 변경할 내용이 없거나 시트 표시명을 디스코드 유저와 연결하지 못했어요. SCHEDULE_SHEET_USER_MAP JSON 또는 A열 \`표시명|유저ID\` 형식을 쓰면 됩니다.`;
         } else {
