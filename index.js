@@ -468,11 +468,13 @@ function interactionMemberIsAdministrator(interaction) {
 const commands = [
   new SlashCommandBuilder()
     .setName("일정생성")
-    .setDescription("주간(수~화, 한국 달력) 요일/시간 참여 여부를 조율판으로 생성합니다.")
+    .setDescription(
+      "주간(수~화, 한국 달력) 요일/시간 참여를 조율판으로 생성합니다. 투표 주간은 게시 블록 시작 수요일 기준 2주 뒤 수요일이 첫날인 7일입니다."
+    )
     .addStringOption((option) =>
       option
         .setName("모드")
-        .setDescription("비우면 기본. 특수도 규칙은 기본과 완전히 동일합니다(구분용).")
+        .setDescription("비우면 기본(투표 주 2주 뒤 수 시작). 특수는 1주 앞(일정생성특수와 동일).")
         .setRequired(false)
         .addChoices(
           { name: "기본", value: "default" },
@@ -482,11 +484,13 @@ const commands = [
   new SlashCommandBuilder()
     .setName("일정생성특수")
     .setDescription(
-      "일정생성과 같으나 투표·조율 주간을 '다음 주 수'가 아니라 게시일이 속한 수~화 블록(저번 주기준)의 시작 수요일로 잡습니다."
+      "일정생성(기본)보다 투표·조율 주간이 1주 앞섭니다. 게시 수~화 블록 기준 다음 수요일이 시작하는 주입니다."
     ),
   new SlashCommandBuilder()
     .setName("schedule_special")
-    .setDescription("Same as /일정생성 — use if Korean slash UI is unreliable on your client."),
+    .setDescription(
+      "Same as /일정생성특수 — vote Wed–Tue window is one week earlier than /일정생성 default (Korean UI fallback)."
+    ),
   new SlashCommandBuilder()
     .setName("일정마감")
     .setDescription("현재 채널의 최신 조율판을 즉시 마감하고 집계를 확정합니다.")
@@ -541,7 +545,7 @@ function makeSessionId() {
 /**
  * @param {{ createdAtMs?: number; priorWeekVoteWindow?: boolean }} [options]
  *   createdAtMs — 세션 생성 시각(기본: 지금). 테스트·크론 등에서만 지정.
- *   priorWeekVoteWindow — true면 투표 주간을 "다음 주 수"가 아니라 게시일이 속한 수~화 블록의 시작 수요일(저번 주기준)으로 잡음.
+ *   priorWeekVoteWindow — true면 기본보다 수~화 주간이 1주 앞섬(블록 시작 수+7일). false면 기본(+14일, 예전 기본 +7에서 1주 추가).
  */
 function registerSession(createdBy, channelId = null, options = {}) {
   const createdAt =
@@ -1388,8 +1392,8 @@ function formatYearMonthLabelFromIsoYmd(isoYmd) {
 function getVoteWindowIsoForSession(session) {
   const postDayIso = formatCalendarDateInTz(session.createdAt, SCHEDULE_TZ);
   const thisBlockWednesdayIso = getWednesdayIsoContaining(postDayIso);
-  /** 기본: 게시일 블록의 **다음** 수요일 시작 주. 일정생성특수: 같은 블록의 시작 수요일(저번 주간 기준). */
-  const wednesdayOffsetDays = session.priorWeekVoteWindow === true ? 0 : 7;
+  /** 기본(/일정생성): 게시 블록 시작 수요일 +14일. 일정생성특수: +7일(기본보다 1주 앞, 예전 기본과 동일). */
+  const wednesdayOffsetDays = session.priorWeekVoteWindow === true ? 7 : 14;
   const weekWednesdayIso = addCalendarDaysToIsoYmd(thisBlockWednesdayIso, wednesdayOffsetDays);
   const voteStartIso = weekWednesdayIso;
   const voteEndIso = addCalendarDaysToIsoYmd(weekWednesdayIso, 6);
