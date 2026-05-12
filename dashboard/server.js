@@ -1204,7 +1204,8 @@ function startDashboardIfEnabled(discordClient, options = {}) {
         ? snapshot.features.scheduleChannelId
         : "";
     const controlHtml = renderRemoteControlPanel(hasRemote, defaultCh);
-    const scheduleMain = `${schedHtml}\n${controlHtml}`;
+    /** 원격 제어(투표 주 시작 수요일)를 스케줄 패널보다 위에 두어 「매주 막을 요일」보다 먼저 보이게 함 */
+    const scheduleMain = `${controlHtml}\n${schedHtml}`;
 
     res
       .type("text/html; charset=utf-8")
