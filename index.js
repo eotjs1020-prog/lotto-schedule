@@ -349,6 +349,23 @@ function getMergedRepeatCycleConfigForComputation() {
 }
 
 /** 조율판과 동일한 수~화 7일 구간에서 달력상 근무인 날의 요일 버튼만 막기 */
+function isCycleWorkDayForScheduleBoard(session, isoYmd, dayIndexFromVoteStart, cfg) {
+  if (
+    session.priorWeekVoteWindow === true &&
+    cfg.cycle &&
+    typeof cfg.cycle === "object" &&
+    !cycleAnchorStartsWorkFromFlag(cfg.cycle.anchorStartsWork)
+  ) {
+    if (dayIndexFromVoteStart <= 1) {
+      return false;
+    }
+    if (dayIndexFromVoteStart <= 4) {
+      return true;
+    }
+  }
+  return isCalendarDateWorkDay(isoYmd, cfg);
+}
+
 function computeCycleBlockedWeekdayKeysForSession(session) {
   const cfg = getMergedRepeatCycleConfigForComputation();
   if (!cfg) {
@@ -362,7 +379,7 @@ function computeCycleBlockedWeekdayKeysForSession(session) {
 
   for (let i = 0; i < 7; i++) {
     const iso = addCalendarDaysToIsoYmd(voteStartIso, i);
-    if (isCalendarDateWorkDay(iso, cfg)) {
+    if (isCycleWorkDayForScheduleBoard(session, iso, i, cfg)) {
       const key = weekdayKeyFromIsoYmd(iso, tz);
       if (key) {
         blocked.add(key);
