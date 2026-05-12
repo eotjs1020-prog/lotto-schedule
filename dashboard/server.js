@@ -17,6 +17,222 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+/** Discord 클라이언트·임베드에 가까운 다크 테마 (대시보드·로그인 오류 페이지 공통) */
+function dashboardSharedStyles() {
+  return `
+:root {
+  --bg-app: #313338;
+  --bg-embed: #2b2d31;
+  --bg-input: #1e1f22;
+  --bg-code: #111214;
+  --border-faint: rgba(0,0,0,0.35);
+  --text-normal: #dbdee1;
+  --text-heading: #f2f3f5;
+  --text-muted: #949ba4;
+  --link: #00a8fc;
+  --blurple: #5865f2;
+  --green: #248046;
+  --red: #da373c;
+  --gray: #4f545c;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: "Noto Sans KR", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  background: var(--bg-app);
+  color: var(--text-normal);
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.88em;
+  background: var(--bg-code);
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: var(--text-heading);
+}
+.muted { color: var(--text-muted); font-size: 0.92rem; }
+.warn { color: var(--red); }
+.embed {
+  background: var(--bg-embed);
+  border-radius: 4px;
+  border-left: 4px solid var(--embed-accent, var(--blurple));
+  padding: 12px 16px 14px 12px;
+  margin-bottom: 16px;
+  max-width: 100%;
+}
+.embed--brand { --embed-accent: var(--blurple); }
+.embed--green { --embed-accent: var(--green); }
+.embed--gray { --embed-accent: var(--gray); }
+.embed--danger { --embed-accent: var(--red); }
+.embed__kicker {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 6px;
+}
+.embed__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-heading);
+  margin: 0 0 8px;
+  line-height: 1.25;
+}
+.embed__desc {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+.kv { display: flex; flex-direction: column; margin-top: 2px; }
+.kv__row {
+  display: grid;
+  grid-template-columns: 8.75rem 1fr;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-faint);
+  font-size: 14px;
+  align-items: start;
+}
+.kv__row:first-of-type { border-top: none; padding-top: 0; }
+.kv__k { color: var(--text-muted); font-weight: 500; }
+.kv__v { color: var(--text-normal); word-break: break-word; }
+.board-list { list-style: none; margin: 0; padding: 0; }
+.board-item {
+  border-top: 1px solid var(--border-faint);
+  padding: 12px 0;
+  margin: 0;
+}
+.board-item:first-child { border-top: none; padding-top: 4px; }
+.board-item__head { font-weight: 600; color: var(--text-heading); margin-bottom: 4px; font-size: 14px; }
+.board-item__meta { font-size: 13px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.4; }
+.board-item__foot { font-size: 13px; }
+.d-btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.d-btn {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  min-height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.d-btn:active { filter: brightness(0.93); }
+.d-btn--primary { background: var(--blurple); }
+.d-btn--green { background: var(--green); }
+.d-btn--danger { background: var(--red); }
+.d-btn--gray { background: var(--gray); }
+.inp, .ta {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: none;
+  border-radius: 4px;
+  color: var(--text-heading);
+  font: inherit;
+}
+.ta { font-family: ui-monospace, monospace; font-size: 13px; line-height: 1.5; resize: vertical; min-height: 80px; }
+.form-label { display: block; font-weight: 600; font-size: 13px; color: var(--text-heading); margin-top: 14px; }
+.form-label .muted { display: block; margin-top: 4px; font-weight: 400; }
+.sched-pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.sched-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 8px 12px;
+  border-radius: 3px;
+  background: var(--blurple);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.sched-pill input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+.sched-pill:has(input:checked) { background: var(--red); }
+.sched-pill:has(input:focus-visible) { outline: 2px solid var(--link); outline-offset: 2px; }
+.dashOut {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--bg-code);
+  border-radius: 4px;
+  max-height: 16rem;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+}
+.dash-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  background: #1e1f22;
+  border-bottom: 1px solid var(--border-faint);
+}
+.dash-title { font-size: 17px; font-weight: 700; color: var(--text-heading); margin: 0; letter-spacing: -0.02em; }
+.dash-title__sub { display: block; font-size: 12px; font-weight: 600; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.dash-nav a { margin-left: 14px; font-size: 14px; font-weight: 500; }
+.dash-main { max-width: 560px; margin: 0 auto; padding: 20px 16px 48px; }
+.footer-note { font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.55; max-width: 560px; margin-left: auto; margin-right: auto; padding: 0 16px 32px; }
+.simple-wrap { max-width: 480px; margin: 48px auto; padding: 0 16px; }
+.simple-wrap .embed ul { margin: 8px 0 0; padding-left: 1.2rem; color: var(--text-normal); }
+.simple-wrap .embed p { margin: 0 0 10px; }
+`;
+}
+
+/**
+ * @param {string} title
+ * @param {"brand" | "danger" | "gray"} embedVariant
+ * @param {string} innerBodyHtml
+ */
+function renderSimpleDashPage(title, embedVariant, innerBodyHtml) {
+  const cls =
+    embedVariant === "danger" ? "embed--danger" : embedVariant === "gray" ? "embed--gray" : "embed--brand";
+  return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>${dashboardSharedStyles()}</style>
+</head>
+<body>
+  <div class="simple-wrap">
+    <article class="embed ${cls}">${innerBodyHtml}</article>
+  </div>
+</body>
+</html>`;
+}
+
 function isDashboardEnabled() {
   const raw = process.env.DASHBOARD_ENABLE;
   if (raw === undefined || raw === null) {
@@ -191,13 +407,13 @@ function dayKeyToKoreanLabel(key) {
 
 function renderBoardsSection(snapshot, guildIdForLinks) {
   if (snapshot && snapshot.error) {
-    return `<p class="warn"><strong>스냅샷 오류:</strong> ${escapeHtml(String(snapshot.error))}</p>`;
+    return `<article class="embed embed--danger"><p class="embed__title" style="margin-top:0">스냅샷 오류</p><p class="warn" style="margin:0">${escapeHtml(String(snapshot.error))}</p></article>`;
   }
   if (!snapshot || !Array.isArray(snapshot.boards)) {
-    return "<p><em>조율판 스냅샷을 불러오지 못했어요.</em></p>";
+    return `<article class="embed embed--gray"><p class="embed__kicker">조율판</p><p class="embed__desc" style="margin:0"><em>조율판 스냅샷을 불러오지 못했어요.</em></p></article>`;
   }
   if (snapshot.boards.length === 0) {
-    return "<p><em>메시지가 있는 활성 조율판이 없어요. (세션은 있어도 아직 게시 전일 수 있음)</em></p>";
+    return `<article class="embed embed--gray"><p class="embed__kicker">조율판</p><h2 class="embed__title">활성 조율판</h2><p class="embed__desc" style="margin:0"><em>메시지가 있는 활성 조율판이 없어요.</em> 세션만 있고 아직 게시 전일 수 있어요.</p></article>`;
   }
   const gid = guildIdForLinks ? escapeHtml(String(guildIdForLinks)) : "";
   const rows = snapshot.boards
@@ -213,20 +429,20 @@ function renderBoardsSection(snapshot, guildIdForLinks) {
         gid && msgId
           ? `<a href="https://discord.com/channels/${gid}/${chId}/${msgId}" target="_blank" rel="noopener">디스코드에서 열기</a>`
           : "—";
-      return `<tr>
-  <td><code>${chId}</code></td>
-  <td>${jump}</td>
-  <td>${escapeHtml(b.voteStartIso)} ~ ${escapeHtml(b.voteEndIso)}</td>
-  <td>${escapeHtml(mode)}</td>
-  <td>${escapeHtml(locks)}</td>
-</tr>`;
+      return `<li class="board-item">
+  <div class="board-item__head">채널 <code>${chId}</code></div>
+  <div class="board-item__meta">투표 기간 · ${escapeHtml(b.voteStartIso)} ~ ${escapeHtml(b.voteEndIso)}<br/>
+  모드 · ${escapeHtml(mode)} · 관리자 잠금 · ${escapeHtml(locks)}</div>
+  <div class="board-item__foot">${jump}</div>
+</li>`;
     })
     .join("\n");
-  return `<h2>활성 조율판</h2>
-<table class="boards">
-  <thead><tr><th>채널 ID</th><th>메시지</th><th>투표 기간(ISO)</th><th>모드</th><th>관리자 잠금</th></tr></thead>
-  <tbody>${rows}</tbody>
-</table>`;
+  return `<article class="embed embed--brand">
+<p class="embed__kicker">조율판</p>
+<h2 class="embed__title">활성 조율판</h2>
+<p class="embed__desc">디스코드에 올라간 조율 메시지와 동일한 구간·모드를 요약해 보여 줍니다. 링크로 해당 메시지로 이동할 수 있어요.</p>
+<ul class="board-list">${rows}</ul>
+</article>`;
 }
 
 function renderFeaturesRow(snapshot) {
@@ -237,9 +453,9 @@ function renderFeaturesRow(snapshot) {
   const cron = f.scheduleCron ? "켜짐" : "꺼짐";
   const live = f.sheetsLive ? "켜짐" : "꺼짐";
   const slash = f.guildSlash ? "길드 등록" : "전역(느림)";
-  return `<tr><th>주간 크론</th><td>${escapeHtml(cron)}</td></tr>
-    <tr><th>실시간 시트</th><td>${escapeHtml(live)}</td></tr>
-    <tr><th>슬래시 등록</th><td>${escapeHtml(slash)}</td></tr>`;
+  return `<div class="kv__row"><span class="kv__k">주간 크론</span><span class="kv__v">${escapeHtml(cron)}</span></div>
+    <div class="kv__row"><span class="kv__k">실시간 시트</span><span class="kv__v">${escapeHtml(live)}</span></div>
+    <div class="kv__row"><span class="kv__k">슬래시 등록</span><span class="kv__v">${escapeHtml(slash)}</span></div>`;
 }
 
 function renderRemoteControlPanel(hasControl, defaultChannelId) {
@@ -248,22 +464,24 @@ function renderRemoteControlPanel(hasControl, defaultChannelId) {
     ? ""
     : `<p class="warn">원격 제어 API가 연결되지 않았습니다. 봇 <code>index.js</code>를 최신으로 배포했는지 확인하세요.</p>`;
   const buttons = hasControl
-    ? `<p class="btnRow">
-<button type="button" id="dashPostDef">조율판 게시 (기본)</button>
-<button type="button" id="dashPostSp">조율판 게시 (특수)</button>
-<button type="button" id="dashClose">최신 조율판 마감</button>
-<button type="button" id="dashSheet">시트→디스코드 동기화</button>
-</p>`
+    ? `<div class="d-btn-row">
+<button type="button" class="d-btn d-btn--primary" id="dashPostDef">조율판 게시 (기본)</button>
+<button type="button" class="d-btn d-btn--gray" id="dashPostSp">조율판 게시 (특수)</button>
+<button type="button" class="d-btn d-btn--danger" id="dashClose">최신 조율판 마감</button>
+<button type="button" class="d-btn d-btn--green" id="dashSheet">시트 동기화</button>
+</div>`
     : "";
   const hc = hasControl ? "true" : "false";
-  return `<div class="card">
-<h2>원격 제어</h2>
-<p class="muted">채널은 <code>GUILD_ID</code>와 같은 길드의 텍스트 채널만 가능합니다. (슬래시 <code>/일정생성</code>과 동일한 게시·<code>/일정마감</code>과 동일한 마감·<code>/시트불러오기</code>와 동일한 동기화)</p>
+  return `<article class="embed embed--gray">
+<p class="embed__kicker">관리</p>
+<h2 class="embed__title">원격 제어</h2>
+<p class="embed__desc">채널은 <code>GUILD_ID</code> 길드의 텍스트 채널만 가능합니다. 슬래시 <code>/일정생성</code>·<code>/일정마감</code>·<code>/시트불러오기</code>와 같은 동작입니다.</p>
 ${disabledNote}
-<p><label for="dashCh">채널 ID</label><br><input id="dashCh" class="inp" type="text" value="${def}" autocomplete="off" spellcheck="false" /></p>
+<label class="form-label" for="dashCh">채널 ID</label>
+<input id="dashCh" class="inp" type="text" value="${def}" autocomplete="off" spellcheck="false" />
 ${buttons}
 <pre id="dashCtlOut" class="dashOut"></pre>
-</div>
+</article>
 <script>
 (function(){
   var pre = document.getElementById("dashCtlOut");
@@ -307,7 +525,7 @@ function renderScheduleConfigPanel(sf, hasSave) {
   const chk = SCHED_DAY_KEYS.map((key) => {
     const on = (sf.blockedDayKeys || []).includes(key);
     const lab = SCHED_DAY_LABEL[key] || key;
-    return `<label class="schedLab"><input type="checkbox" class="dashSchedChk" data-dk="${key}" ${
+    return `<label class="sched-pill"><input type="checkbox" class="dashSchedChk" data-dk="${key}" ${
       on ? "checked" : ""
     }/> ${escapeHtml(lab)}</label>`;
   }).join("");
@@ -315,20 +533,25 @@ function renderScheduleConfigPanel(sf, hasSave) {
     ? ""
     : `<p class="warn">저장 API가 연결되지 않았습니다. <code>index.js</code>의 <code>startDashboardIfEnabled</code>에 <code>saveDashboardScheduleConfig</code>가 있는지 확인하세요.</p>`;
   const btn = hasSave
-    ? `<p class="btnRow"><button type="button" id="dashSchedSave">파일에 저장</button></p>`
+    ? `<div class="d-btn-row"><button type="button" class="d-btn d-btn--green" id="dashSchedSave">파일에 저장</button></div>`
     : "";
   const hc = hasSave ? "true" : "false";
-  return `<div class="card">
-<h2>일정 규칙 · 안내글</h2>
-<p class="muted">설정은 <code>USER_WORK_SCHEDULE_PATH</code>가 있으면 그 파일, 없으면 프로젝트 루트의 <code>user-work-schedule.json</code>에 저장됩니다. (봇 프로세스가 쓸 수 있는 경로여야 합니다.)</p>
-<p class="muted">저장한 <strong>요일 막기·휴일·추가 근무일</strong>은 곧바로 버튼 색에 반영됩니다. <strong>안내글</strong>은 <strong>새로 게시하는 조율판</strong> embed에만 적용됩니다.</p>
+  return `<article class="embed embed--green">
+<p class="embed__kicker">스케줄</p>
+<h2 class="embed__title">일정 규칙 · 안내글</h2>
+<p class="embed__desc">설정은 <code>USER_WORK_SCHEDULE_PATH</code>가 있으면 그 파일, 없으면 프로젝트 루트 <code>user-work-schedule.json</code>에 저장됩니다. 요일 막기·휴일·추가 근무일은 저장 직후 버튼 색에 반영되고, 안내글은 <strong>새로 게시하는 조율판</strong> embed에만 적용됩니다.</p>
 ${warn}
-<p><strong>파일</strong><br><code>${pathEsc || "—"}</code></p>
-<p><label for="dashHol">공휴일·휴무일 (YYYY-MM-DD)</label><br><span class="muted">조율 주 7일 안에 들어오는 이 날짜는, 근무일 목록에 있어도 요일 버튼을 <strong>막지 않습니다</strong>.</span><br><textarea id="dashHol" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-05&#10;2026-10-03">${holLines}</textarea></p>
-<p><label for="dashWork">추가 근무일 (YYYY-MM-DD)</label><br><span class="muted">조율 주에 포함되면 해당 날의 요일 버튼이 <strong>빨강(선택 불가)</strong>으로 잡힙니다. (.env의 SCHEDULE_GLOBAL_WORK_DATES와 합쳐집니다.)</span><br><textarea id="dashWork" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-08">${workLines}</textarea></p>
-<p><strong>매주 막을 요일</strong> <span class="muted">(전역 — 달력 근무일 막기와 무관하게 항상 빨강)</span></p>
-<p class="schedChkRow">${chk}</p>
-<p><label for="dashGuide">조율판 안내글 (<code>**안내**</code> 아래 전체)</label><br><span class="muted">비우고 저장하면 기본 문구로 돌아갑니다. Discord embed 한도로 약 ${2000}자까지.</span><br><textarea id="dashGuide" class="inp ta" rows="10" spellcheck="false" placeholder="(기본 안내 사용 중)">${guideEsc}</textarea></p>
+<p class="embed__desc" style="margin-bottom:0"><strong>파일</strong> <code>${pathEsc || "—"}</code></p>
+<label class="form-label" for="dashHol">공휴일·휴무일 <span class="muted">(YYYY-MM-DD, 한 줄에 하나)</span></label>
+<span class="muted">조율 주 7일 안에 들어오는 날은 근무일 목록에 있어도 요일 버튼을 막지 않습니다.</span>
+<textarea id="dashHol" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-05&#10;2026-10-03">${holLines}</textarea>
+<label class="form-label" for="dashWork">추가 근무일 <span class="muted">(YYYY-MM-DD)</span></label>
+<span class="muted">조율 주에 포함되면 해당 요일 버튼이 빨강(선택 불가). <code>SCHEDULE_GLOBAL_WORK_DATES</code>와 합쳐집니다.</span>
+<textarea id="dashWork" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-08">${workLines}</textarea>
+<label class="form-label">매주 막을 요일 <span class="muted">(디스코드 빨강 버튼과 같음)</span></label>
+<div class="sched-pill-row">${chk}</div>
+<label class="form-label" for="dashGuide">조율판 안내글 <span class="muted">(<code>**안내**</code> 아래 전체, 비우면 기본, 약 ${2000}자)</span></label>
+<textarea id="dashGuide" class="inp ta" rows="10" spellcheck="false" placeholder="(기본 안내 사용 중)">${guideEsc}</textarea>
 ${btn}
 <pre id="dashSchedOut" class="dashOut"></pre>
 <script>
@@ -361,7 +584,7 @@ ${btn}
   if(${hc}){ document.getElementById("dashSchedSave").onclick = save; }
 })();
 </script>
-</div>`;
+</article>`;
 }
 
 /**
@@ -483,29 +706,43 @@ function startDashboardIfEnabled(discordClient, options = {}) {
   app.get("/dashboard/login", (req, res) => {
     const err = req.query.error;
     if (err === "forbidden") {
-      res.status(403).type("text/html; charset=utf-8")
-        .send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>접근 불가</title></head><body>
-<p>이 길드(<code>${escapeHtml(guildId)}</code>)에 들어올 권한이 없어요. 아래 중 하나여야 합니다.</p>
+      res
+        .status(403)
+        .type("text/html; charset=utf-8")
+        .send(
+          renderSimpleDashPage(
+            "접근 불가",
+            "danger",
+            `<p class="embed__title" style="margin-top:0">권한 없음</p>
+<p>이 길드(<code>${escapeHtml(guildId)}</code>) 대시보드에 들어올 권한이 없어요. 아래 중 하나여야 합니다.</p>
 <ul>
-  <li><strong>관리자(Administrator)</strong> 권한, 또는</li>
-  <li><code>.env</code>의 <code>DASHBOARD_ACCESS_USER_IDS</code>에 본인 유저 ID가 포함된 경우, 또는</li>
-  <li><code>DASHBOARD_ACCESS_ROLE_IDS</code>에 적은 역할 ID 중 하나를 본인이 가진 경우 (봇이 길드에 있고 멤버를 읽을 수 있어야 함)</li>
+  <li><strong>Administrator</strong> 권한, 또는</li>
+  <li><code>.env</code>의 <code>DASHBOARD_ACCESS_USER_IDS</code>에 본인 유저 ID, 또는</li>
+  <li><code>DASHBOARD_ACCESS_ROLE_IDS</code>의 역할을 본인이 보유 (봇이 길드에 있고 멤버를 읽을 수 있어야 함)</li>
 </ul>
-<p><a href="/dashboard/login">다시 로그인</a></p>
-</body></html>`);
+<p><a href="/dashboard/login">다시 로그인</a></p>`
+          )
+        );
       return;
     }
     if (err === "oauth") {
-      res.status(502).type("text/html; charset=utf-8")
-        .send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>로그인 실패</title></head><body>
-<p>디스코드 로그인 처리 중 오류가 났어요.</p>
+      res
+        .status(502)
+        .type("text/html; charset=utf-8")
+        .send(
+          renderSimpleDashPage(
+            "로그인 실패",
+            "gray",
+            `<p class="embed__title" style="margin-top:0">OAuth 오류</p>
+<p>디스코드 로그인 처리 중 문제가 났어요.</p>
 <ul>
-  <li>개발자 포털 OAuth2 <strong>Redirects</strong>와 <code>.env</code>의 <code>DASHBOARD_OAUTH_REDIRECT_URI</code>가 <strong>한 글자도 다르지 않게</strong> 같은지 확인 (http/https, 포트, 경로 <code>/auth/discord/callback</code>).</li>
+  <li>개발자 포털 OAuth2 <strong>Redirects</strong>와 <code>.env</code>의 <code>DASHBOARD_OAUTH_REDIRECT_URI</code>가 <strong>완전히 동일</strong>한지 확인 (<code>http</code>/<code>https</code>, 포트, 경로 <code>/auth/discord/callback</code>).</li>
   <li><code>DISCORD_CLIENT_SECRET</code>은 봇 토큰이 아니라 앱의 <strong>OAuth2 Client Secret</strong>입니다.</li>
-  <li>서버에서: <code>sudo journalctl -u discord-bot -n 30 --no-pager | grep dashboard</code> 로 상세 오류를 확인하세요.</li>
+  <li>서버: <code>sudo journalctl -u discord-bot -n 30 --no-pager | grep dashboard</code></li>
 </ul>
-<p><a href="/dashboard/login">다시 시도</a></p>
-</body></html>`);
+<p><a href="/dashboard/login">다시 시도</a></p>`
+          )
+        );
       return;
     }
     const params = new URLSearchParams({
@@ -732,7 +969,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     const displayName = du.global_name || du.username || du.id;
     const extraSessions =
       typeof sessionCount === "number"
-        ? `<tr><th>활성 세션 수</th><td><code>${escapeHtml(String(sessionCount))}</code> <span class="muted">(맵 전체)</span></td></tr>`
+        ? `<div class="kv__row"><span class="kv__k">활성 세션 수</span><span class="kv__v"><code>${escapeHtml(String(sessionCount))}</code> <span class="muted">(맵 전체)</span></span></div>`
         : "";
     const featuresHtml = renderFeaturesRow(snapshot);
     const boardsHtml = renderBoardsSection(snapshot, guildId);
@@ -764,69 +1001,47 @@ function startDashboardIfEnabled(discordClient, options = {}) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>조율 봇 · 대시보드</title>
-  <style>
-    :root { --bg: #313338; --card: #2b2d31; --text: #f2f3f5; --muted: #949ba4; --link: #00a8fc; --border: #1e1f22; }
-    body { font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; min-height: 100vh; }
-    .wrap { max-width: 52rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
-    header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
-    h1 { font-size: 1.35rem; font-weight: 600; margin: 0; }
-    nav a { color: var(--link); margin-left: 1rem; white-space: nowrap; }
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
-    .card h2 { font-size: 0.8rem; margin: 0 0 0.75rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
-    table.meta { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
-    table.meta th, table.meta td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-    table.meta th { width: 11rem; color: var(--muted); font-weight: 500; }
-    table.boards { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
-    table.boards th, table.boards td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--border); }
-    table.boards thead th { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: .04em; }
-    code { font-size: 0.85em; background: #111214; padding: 0.12em 0.4em; border-radius: 4px; }
-    a { color: var(--link); }
-    .muted { color: var(--muted); font-size: 0.88rem; }
-    .warn { color: #f23f43; }
-    .inp { width: 100%; max-width: 28rem; padding: 0.45rem 0.6rem; background: #111214; border: 1px solid var(--border); color: var(--text); border-radius: 6px; box-sizing: border-box; }
-    .dashOut { margin-top: 0.75rem; padding: 0.75rem; background: #111214; border-radius: 6px; max-height: 16rem; overflow: auto; font-size: 0.8rem; white-space: pre-wrap; }
-    .btnRow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
-    .btnRow button { padding: 0.4rem 0.75rem; cursor: pointer; border-radius: 6px; border: 1px solid var(--border); background: #404249; color: var(--text); }
-    .ta { font-family: ui-monospace, monospace; font-size: 0.85rem; line-height: 1.45; }
-    .schedChkRow { display: flex; flex-wrap: wrap; gap: 0.65rem 1rem; align-items: center; margin: 0.35rem 0 0.75rem; }
-    .schedLab { font-size: 0.9rem; cursor: pointer; user-select: none; }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>${dashboardSharedStyles()}</style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>조율 봇 · 대시보드</h1>
-      <nav>
-        <span class="muted">${escapeHtml(displayName)}</span>
-        <a href="/dashboard/api/snapshot.json" target="_blank" rel="noopener">JSON</a>
-        <a href="/dashboard/logout">로그아웃</a>
-      </nav>
-    </header>
-
-    <div class="card">
-      <h2>봇 / 길드</h2>
-      <table class="meta">
-        <tr><th>봇</th><td>${escapeHtml(tag)}</td></tr>
-        <tr><th>준비</th><td>${ready ? "준비됨" : "연결 중"}</td></tr>
-        <tr><th>가동(초)</th><td>${escapeHtml(String(uptimeSec))}</td></tr>
-        <tr><th>WebSocket 핑</th><td>${pingMs != null ? escapeHtml(String(pingMs)) + " ms" : "—"}</td></tr>
-        <tr><th>길드 ID</th><td><code>${escapeHtml(guildId)}</code></td></tr>
-        <tr><th>길드 이름</th><td>${escapeHtml(guildName)}</td></tr>
+  <header class="dash-header">
+    <div>
+      <h1 class="dash-title">조율 봇</h1>
+      <span class="dash-title__sub">대시보드 · ${escapeHtml(guildName)}</span>
+    </div>
+    <nav class="dash-nav">
+      <span class="muted">${escapeHtml(displayName)}</span>
+      <a href="/dashboard/api/snapshot.json" target="_blank" rel="noopener">JSON</a>
+      <a href="/dashboard/logout">로그아웃</a>
+    </nav>
+  </header>
+  <main class="dash-main">
+    <article class="embed embed--brand">
+      <p class="embed__kicker">상태</p>
+      <h2 class="embed__title">봇 · 길드</h2>
+      <p class="embed__desc">연결·핑·기능 플래그를 한눈에 봅니다. (디스코드 임베드와 비슷한 레이아웃)</p>
+      <div class="kv">
+        <div class="kv__row"><span class="kv__k">봇</span><span class="kv__v">${escapeHtml(tag)}</span></div>
+        <div class="kv__row"><span class="kv__k">준비</span><span class="kv__v">${ready ? "준비됨" : "연결 중"}</span></div>
+        <div class="kv__row"><span class="kv__k">가동 시간</span><span class="kv__v">${escapeHtml(String(uptimeSec))} 초</span></div>
+        <div class="kv__row"><span class="kv__k">WebSocket 핑</span><span class="kv__v">${pingMs != null ? escapeHtml(String(pingMs)) + " ms" : "—"}</span></div>
+        <div class="kv__row"><span class="kv__k">길드 ID</span><span class="kv__v"><code>${escapeHtml(guildId)}</code></span></div>
+        <div class="kv__row"><span class="kv__k">길드 이름</span><span class="kv__v">${escapeHtml(guildName)}</span></div>
         ${extraSessions}
         ${featuresHtml}
-      </table>
-    </div>
+      </div>
+    </article>
 
-    <div class="card">
-      ${boardsHtml}
-    </div>
+    ${boardsHtml}
 
     ${schedHtml}
 
     ${controlHtml}
-
-    <p class="muted">접속: <code>GUILD_ID</code> 길드의 <strong>Administrator</strong> 이거나, <code>DASHBOARD_ACCESS_USER_IDS</code> / <code>DASHBOARD_ACCESS_ROLE_IDS</code>(.env)에 해당하는 경우입니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
-  </div>
+  </main>
+  <p class="footer-note">접속: <code>GUILD_ID</code> 길드의 <strong>Administrator</strong> 이거나, <code>DASHBOARD_ACCESS_USER_IDS</code> / <code>DASHBOARD_ACCESS_ROLE_IDS</code>(.env)에 해당하는 경우입니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
 </body>
 </html>`);
   });
