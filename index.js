@@ -1419,12 +1419,12 @@ function getBoardWeekWednesdayIsoFromSession(session) {
   return getVoteWindowIsoForSession(sourceSession).weekWednesdayIso;
 }
 
-/** 임베드·집계 줄용: "2026년 5월 12일 월요일"처럼 연·월·일을 요일 앞에 고정 표기 */
+/** 임베드·집계 줄용: "12일 월요일" — 연·월 없이 일자와 요일만 */
 function formatDayAggregateHeadline(day, weekWednesdayIso) {
   const off = DAY_OFFSET_FROM_WEDNESDAY[day.key] ?? 0;
   const iso = addCalendarDaysToIsoYmd(weekWednesdayIso, off);
-  const [y, m, d] = iso.split("-").map(Number);
-  return `${y}년 ${m}월 ${d}일 ${day.label}요일`;
+  const dom = Number.parseInt(iso.split("-")[2], 10);
+  return `${dom}일 ${day.label}요일`;
 }
 
 function buildComponents(sessionId, session) {
