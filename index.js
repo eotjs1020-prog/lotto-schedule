@@ -79,6 +79,18 @@ function addCalendarDaysToIsoYmd(isoYmd, deltaDays) {
   return formatCalendarDateInTz(ms, SCHEDULE_TZ);
 }
 
+/** 기준일이 근무 구간의 첫날인지. true / 1 / "1" / "true" 만 근무 먼저. 그 외는 휴무 먼저(기본). */
+function cycleAnchorStartsWorkFromFlag(value) {
+  if (value === true || value === 1) {
+    return true;
+  }
+  if (typeof value === "string") {
+    const s = value.trim().toLowerCase();
+    return s === "1" || s === "true";
+  }
+  return false;
+}
+
 function loadUserWorkScheduleMap() {
   const resolvedPath = getUserWorkSchedulePath();
   try {
@@ -150,7 +162,7 @@ function isCalendarDateWorkDay(isoYmd, cfg) {
     return false;
   }
 
-  const anchorStartsWork = cycle.anchorStartsWork !== false;
+  const anchorStartsWork = cycleAnchorStartsWorkFromFlag(cycle.anchorStartsWork);
   const cycleLen = workDays + restDays;
   const diffDays = diffCalendarDays(anchorDate, isoYmd);
   const pos = ((diffDays % cycleLen) + cycleLen) % cycleLen;
@@ -236,7 +248,7 @@ function getEnvGlobalCycleScheduleConfig() {
   const raw = process.env.SCHEDULE_GLOBAL_CYCLE_ANCHOR_STARTS_WORK;
   let anchorStartsWork = false;
   if (raw !== undefined && String(raw).trim() !== "") {
-    anchorStartsWork = raw === "1" || raw.toLowerCase() === "true";
+    anchorStartsWork = cycleAnchorStartsWorkFromFlag(String(raw).trim());
   }
   return {
     timezone: SCHEDULE_TZ,
@@ -314,7 +326,7 @@ function getMergedRepeatCycleConfigForComputation() {
         anchorDate,
         workDays,
         restDays,
-        anchorStartsWork: c.anchorStartsWork !== false,
+        anchorStartsWork: cycleAnchorStartsWorkFromFlag(c.anchorStartsWork),
       };
       if (typeof g.timezone === "string" && g.timezone.trim()) {
         tz = g.timezone.trim();
