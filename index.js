@@ -467,13 +467,46 @@ function isUserAllowedScheduleButtons(userId) {
   return true;
 }
 
+/** 일부 환경에서 memberPermissions 가 비어 관리자도 막히는 경우가 있어 채널 기준으로 한 번 더 확인 */
+function interactionMemberIsAdministrator(interaction) {
+  if (!interaction.inGuild()) {
+    return false;
+  }
+  if (interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return true;
+  }
+  const member = interaction.member;
+  const channel = interaction.channel;
+  if (member && channel && typeof member.permissionsIn === "function") {
+    try {
+      return member.permissionsIn(channel).has(PermissionFlagsBits.Administrator);
+    } catch (_) {
+      return false;
+    }
+  }
+  return false;
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName("일정생성")
-    .setDescription("주간(수~화, 한국 달력) 요일/시간 참여 여부를 조율판으로 생성합니다."),
+    .setDescription("주간(수~화, 한국 달력) 요일/시간 참여 여부를 조율판으로 생성합니다.")
+    .addStringOption((option) =>
+      option
+        .setName("모드")
+        .setDescription("비우면 기본. 특수도 규칙은 기본과 완전히 동일합니다(구분용).")
+        .setRequired(false)
+        .addChoices(
+          { name: "기본", value: "default" },
+          { name: "특수", value: "special" }
+        )
+    ),
   new SlashCommandBuilder()
     .setName("일정생성특수")
-    .setDescription("일정생성과 동일합니다. (수~화 주간·다음 주 기준 등 같은 규칙, 별도 명령으로 구분용.)"),
+    .setDescription("일정생성과 동일한 규칙으로 조율판을 만듭니다. (구분용 별도 명령.)"),
+  new SlashCommandBuilder()
+    .setName("schedule_special")
+    .setDescription("Same as /일정생성 — use if Korean slash UI is unreliable on your client."),
   new SlashCommandBuilder()
     .setName("일정마감")
     .setDescription("현재 채널의 최신 조율판을 즉시 마감하고 집계를 확정합니다.")
@@ -483,6 +516,10 @@ const commands = [
     .setDescription(
       "실시간 Google 시트(GOOGLE_SHEET_LIVE_RANGE)를 읽어 같은 투표 주간의 조율판 임베드를 갱신합니다."
     )
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
+    .setName("sheet_sync")
+    .setDescription("Same as /시트불러오기 — import live sheet into matching schedule boards.")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map((command) => command.toJSON());
 
@@ -506,14 +543,15 @@ async function registerCommands(client) {
 
   const rest = new REST({ version: "10" }).setToken(token);
 
+  const commandNames = commands.map((c) => c.name).join(", ");
   if (guildId) {
     await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
-    console.log("길드 전용 슬래시 명령어 등록 완료");
+    console.log(`길드 전용 슬래시 명령어 등록 완료 (${commandNames})`);
     return;
   }
 
   await rest.put(Routes.applicationCommands(clientId), { body: commands });
-  console.log("전역 슬래시 명령어 등록 완료 (반영까지 시간 소요 가능)");
+  console.log(`전역 슬래시 명령어 등록 완료 (${commandNames}) — 디스코드에 반영까지 수 분 걸릴 수 있음`);
 }
 
 function makeSessionId() {
@@ -1324,12 +1362,12 @@ function getBoardWeekWednesdayIsoFromSession(session) {
   return getVoteWindowIsoForSession(sourceSession).weekWednesdayIso;
 }
 
-/** 임베드 집계 줄용: 수요일 시작 주간의 해당 요일 + 일자 */
+/** 임베드·집계 줄용: "2026년 5월 12일 월요일"처럼 연·월·일을 요일 앞에 고정 표기 */
 function formatDayAggregateHeadline(day, weekWednesdayIso) {
   const off = DAY_OFFSET_FROM_WEDNESDAY[day.key] ?? 0;
   const iso = addCalendarDaysToIsoYmd(weekWednesdayIso, off);
-  const dom = Number.parseInt(iso.split("-")[2], 10);
-  return `${dom}일 ${day.label}요일`;
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${y}년 ${m}월 ${d}일 ${day.label}요일`;
 }
 
 function buildComponents(sessionId, session) {
@@ -1515,7 +1553,9 @@ function buildSummaryEmbed(session) {
   );
   head.push("");
   head.push(
-    `**투표시작/마감일**\n${formatIsoYmdForBoard(voteStartIso)} - ${formatIsoYmdForBoard(voteEndIso)}`
+    `**투표시작/마감일**\n` +
+      `시작 ${formatIsoYmdForBoard(voteStartIso)}\n` +
+      `마감 ${formatIsoYmdForBoard(voteEndIso)}`
   );
   head.push("");
   head.push(`**안내**\n${guideText}`);
@@ -1628,6 +1668,7 @@ const client = new Client({
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`${readyClient.user.tag} 로그인 완료`);
+  console.log("[봇이 읽은 index.js]", path.resolve(__dirname, "index.js"));
   loadUserWorkScheduleMap();
   const globalDates = getEnvGlobalWorkDateSet();
   if (globalDates) {
@@ -1701,9 +1742,9 @@ client.once(Events.ClientReady, async (readyClient) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === "일정마감") {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      if (!interactionMemberIsAdministrator(interaction)) {
         await interaction.reply({
-          content: "이 명령어는 관리자만 사용할 수 있어요.",
+          content: "이 명령어는 서버 관리자만 사용할 수 있어요.",
           ephemeral: true,
         });
         return;
@@ -1737,10 +1778,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.commandName === "시트불러오기") {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    if (interaction.commandName === "시트불러오기" || interaction.commandName === "sheet_sync") {
+      if (!interactionMemberIsAdministrator(interaction)) {
         await interaction.reply({
-          content: "이 명령어는 관리자만 사용할 수 있어요.",
+          content: "이 명령어는 서버 관리자만 사용할 수 있어요. (채널에서 다시 시도해 주세요.)",
           ephemeral: true,
         });
         return;
@@ -1779,21 +1820,44 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.commandName !== "일정생성" && interaction.commandName !== "일정생성특수") {
+    if (
+      interaction.commandName === "일정생성" ||
+      interaction.commandName === "일정생성특수" ||
+      interaction.commandName === "schedule_special"
+    ) {
+      await interaction.deferReply();
+      try {
+        const { sessionId, session } = registerSession(interaction.user.id, interaction.channelId);
+
+        const embed = buildSummaryEmbed(session);
+        const message = await interaction.editReply({
+          embeds: [embed],
+          components: buildComponents(sessionId, session),
+        });
+
+        session.messageId = message.id;
+        scheduleLiveSheetSync(session);
+      } catch (err) {
+        console.error(`[${interaction.commandName}] 조율판 생성 실패:`, err);
+        try {
+          if (interaction.deferred) {
+            await interaction.editReply({
+              content: "조율판을 만들지 못했어요. 봇에게 이 채널에서 스레드·임베드·버튼 권한이 있는지 확인해 주세요.",
+            });
+          } else {
+            await interaction.reply({
+              content: "조율판을 만들지 못했어요.",
+              ephemeral: true,
+            });
+          }
+        } catch (_) {
+          /* interaction may already be invalid */
+        }
+      }
       return;
     }
 
-    await interaction.deferReply();
-    const { sessionId, session } = registerSession(interaction.user.id, interaction.channelId);
-
-    const embed = buildSummaryEmbed(session);
-    const message = await interaction.editReply({
-      embeds: [embed],
-      components: buildComponents(sessionId, session),
-    });
-
-    session.messageId = message.id;
-    scheduleLiveSheetSync(session);
+    console.warn("[슬래시] 처리 없는 명령:", interaction.commandName);
     return;
   }
 
