@@ -127,6 +127,63 @@ function userIsGuildAdministratorIn(guilds, guildId) {
   }
 }
 
+function parseEnvSnowflakeSet(envKey) {
+  const raw = process.env[envKey];
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return new Set();
+  }
+  const out = new Set();
+  for (const part of String(raw).split(/[\s,]+/)) {
+    const id = part.trim();
+    if (/^\d{17,22}$/.test(id)) {
+      out.add(id);
+    }
+  }
+  return out;
+}
+
+function userInOAuthGuildList(guilds, guildId) {
+  return Boolean(guilds.find((x) => x && String(x.id) === String(guildId)));
+}
+
+/** Administrator 이거나 .env 로 지정한 부관리자(유저 ID / 역할) */
+async function userHasDashboardAccess(discordClient, guilds, guildId, userId) {
+  if (userIsGuildAdministratorIn(guilds, guildId)) {
+    return true;
+  }
+  if (!userInOAuthGuildList(guilds, guildId)) {
+    return false;
+  }
+  const uid = String(userId);
+  if (parseEnvSnowflakeSet("DASHBOARD_ACCESS_USER_IDS").has(uid)) {
+    return true;
+  }
+  const allowRoles = parseEnvSnowflakeSet("DASHBOARD_ACCESS_ROLE_IDS");
+  if (allowRoles.size === 0) {
+    return false;
+  }
+  if (!discordClient.isReady()) {
+    console.warn("[dashboard] 부관리자(역할) 검사: 봇이 아직 준비 전이라 건너뜀");
+    return false;
+  }
+  try {
+    const guild = await discordClient.guilds.fetch(String(guildId));
+    const member = await guild.members.fetch(uid).catch(() => null);
+    if (!member) {
+      return false;
+    }
+    for (const rid of allowRoles) {
+      if (member.roles.cache.has(rid)) {
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn("[dashboard] 부관리자(역할) 검사 실패:", e?.message || e);
+    return false;
+  }
+  return false;
+}
+
 function dayKeyToKoreanLabel(key) {
   const map = { MON: "월", TUE: "화", WED: "수", THU: "목", FRI: "금", SAT: "토", SUN: "일" };
   return map[key] || key;
@@ -428,7 +485,12 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     if (err === "forbidden") {
       res.status(403).type("text/html; charset=utf-8")
         .send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>접근 불가</title></head><body>
-<p>이 길드(<code>${escapeHtml(guildId)}</code>)에서 <strong>관리자(Administrator)</strong> 권한이 있는 계정만 들어올 수 있어요.</p>
+<p>이 길드(<code>${escapeHtml(guildId)}</code>)에 들어올 권한이 없어요. 아래 중 하나여야 합니다.</p>
+<ul>
+  <li><strong>관리자(Administrator)</strong> 권한, 또는</li>
+  <li><code>.env</code>의 <code>DASHBOARD_ACCESS_USER_IDS</code>에 본인 유저 ID가 포함된 경우, 또는</li>
+  <li><code>DASHBOARD_ACCESS_ROLE_IDS</code>에 적은 역할 ID 중 하나를 본인이 가진 경우 (봇이 길드에 있고 멤버를 읽을 수 있어야 함)</li>
+</ul>
 <p><a href="/dashboard/login">다시 로그인</a></p>
 </body></html>`);
       return;
@@ -485,7 +547,9 @@ function startDashboardIfEnabled(discordClient, options = {}) {
         fetchDiscordUserGuilds(accessToken),
         fetchDiscordUserMe(accessToken),
       ]);
-      if (!userIsGuildAdministratorIn(guilds, guildId)) {
+      const userIdStr = String(me.id);
+      const allowed = await userHasDashboardAccess(discordClient, guilds, guildId, userIdStr);
+      if (!allowed) {
         res.redirect("/dashboard/login?error=forbidden");
         return;
       }
@@ -761,7 +825,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
 
     ${controlHtml}
 
-    <p class="muted">OAuth 로그인한 계정은 <code>GUILD_ID</code> 길드에서 Administrator 여야 합니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
+    <p class="muted">접속: <code>GUILD_ID</code> 길드의 <strong>Administrator</strong> 이거나, <code>DASHBOARD_ACCESS_USER_IDS</code> / <code>DASHBOARD_ACCESS_ROLE_IDS</code>(.env)에 해당하는 경우입니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
   </div>
 </body>
 </html>`);
