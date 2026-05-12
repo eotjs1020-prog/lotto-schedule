@@ -2299,6 +2299,8 @@ function getDashboardSnapshot() {
     const src = session.createdAt ? session : { ...session, createdAt: Date.now() };
     const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(src);
     boards.push({
+      sessionId: session.id,
+      messageId: session.messageId,
       channelId: session.channelId,
       createdAt: session.createdAt,
       voteStartIso,
@@ -2313,10 +2315,70 @@ function getDashboardSnapshot() {
     boards,
     features: {
       scheduleCron: Boolean(process.env.SCHEDULE_CHANNEL_ID),
+      scheduleChannelId: process.env.SCHEDULE_CHANNEL_ID ? String(process.env.SCHEDULE_CHANNEL_ID).trim() : "",
       sheetsLive: Boolean(process.env.GOOGLE_SPREADSHEET_ID && process.env.GOOGLE_SHEET_LIVE_RANGE),
       guildSlash: Boolean(process.env.GUILD_ID),
     },
   };
+}
+
+function dashboardSnowflakeOk(id) {
+  return /^\d{17,22}$/.test(String(id || "").trim());
+}
+
+async function dashboardAssertGuildChannel(channelId) {
+  const cid = String(channelId || "").trim();
+  if (!dashboardSnowflakeOk(cid)) {
+    return { ok: false, error: "channel_id_invalid", channel: null };
+  }
+  const guildEnv = process.env.GUILD_ID ? String(process.env.GUILD_ID).trim() : "";
+  if (!guildEnv) {
+    return { ok: false, error: "guild_id_missing", channel: null };
+  }
+  const ch = await client.channels.fetch(cid).catch(() => null);
+  if (!ch || !ch.isTextBased()) {
+    return { ok: false, error: "channel_not_found", channel: null };
+  }
+  if (String(ch.guildId) !== guildEnv) {
+    return { ok: false, error: "channel_not_in_guild", channel: null };
+  }
+  return { ok: true, channel: ch };
+}
+
+async function dashboardControlCloseLatestInChannel(channelId) {
+  const v = await dashboardAssertGuildChannel(channelId);
+  if (!v.ok) {
+    return v;
+  }
+  const latest = findLatestSessionInChannel(v.channel.id);
+  if (!latest || !latest.messageId) {
+    return { ok: false, error: "no_active_board" };
+  }
+  await closeSessionAndPublishSummary(client, latest, "[대시보드]");
+  return { ok: true };
+}
+
+async function dashboardControlImportSheet() {
+  const r = await importLiveSheetToDiscordSessions(client);
+  return { ok: true, result: r };
+}
+
+async function dashboardControlPostBoard(channelId, mode) {
+  const v = await dashboardAssertGuildChannel(channelId);
+  if (!v.ok) {
+    return v;
+  }
+  const priorWeek = mode === "special";
+  const { sessionId, session } = registerSession(client.user.id, v.channel.id, {
+    priorWeekVoteWindow: priorWeek,
+  });
+  const message = await v.channel.send({
+    embeds: [buildSummaryEmbed(session)],
+    components: buildComponents(sessionId, session),
+  });
+  session.messageId = message.id;
+  scheduleLiveSheetSync(session);
+  return { ok: true, messageUrl: message.url, sessionId };
 }
 
 client.login(process.env.DISCORD_TOKEN);
@@ -2326,6 +2388,9 @@ try {
   startDashboardIfEnabled(client, {
     getActiveSessionCount: () => sessions.size,
     getDashboardSnapshot,
+    dashboardCloseLatestInChannel: (cid) => dashboardControlCloseLatestInChannel(cid),
+    dashboardImportSheet: () => dashboardControlImportSheet(),
+    dashboardPostBoard: (cid, mode) => dashboardControlPostBoard(cid, mode),
   });
 } catch (err) {
   console.warn(

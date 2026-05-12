@@ -132,7 +132,7 @@ function dayKeyToKoreanLabel(key) {
   return map[key] || key;
 }
 
-function renderBoardsSection(snapshot) {
+function renderBoardsSection(snapshot, guildIdForLinks) {
   if (snapshot && snapshot.error) {
     return `<p class="warn"><strong>스냅샷 오류:</strong> ${escapeHtml(String(snapshot.error))}</p>`;
   }
@@ -142,6 +142,7 @@ function renderBoardsSection(snapshot) {
   if (snapshot.boards.length === 0) {
     return "<p><em>메시지가 있는 활성 조율판이 없어요. (세션은 있어도 아직 게시 전일 수 있음)</em></p>";
   }
+  const gid = guildIdForLinks ? escapeHtml(String(guildIdForLinks)) : "";
   const rows = snapshot.boards
     .map((b) => {
       const mode = b.priorWeek ? "특수(+7)" : "기본(+14)";
@@ -149,8 +150,15 @@ function renderBoardsSection(snapshot) {
         b.manualLockedKeys && b.manualLockedKeys.length > 0
           ? b.manualLockedKeys.map(dayKeyToKoreanLabel).join(", ")
           : "—";
+      const msgId = b.messageId != null ? escapeHtml(String(b.messageId)) : "";
+      const chId = escapeHtml(String(b.channelId));
+      const jump =
+        gid && msgId
+          ? `<a href="https://discord.com/channels/${gid}/${chId}/${msgId}" target="_blank" rel="noopener">디스코드에서 열기</a>`
+          : "—";
       return `<tr>
-  <td><code>${escapeHtml(String(b.channelId))}</code></td>
+  <td><code>${chId}</code></td>
+  <td>${jump}</td>
   <td>${escapeHtml(b.voteStartIso)} ~ ${escapeHtml(b.voteEndIso)}</td>
   <td>${escapeHtml(mode)}</td>
   <td>${escapeHtml(locks)}</td>
@@ -159,7 +167,7 @@ function renderBoardsSection(snapshot) {
     .join("\n");
   return `<h2>활성 조율판</h2>
 <table class="boards">
-  <thead><tr><th>채널 ID</th><th>투표 기간(ISO)</th><th>모드</th><th>관리자 잠금</th></tr></thead>
+  <thead><tr><th>채널 ID</th><th>메시지</th><th>투표 기간(ISO)</th><th>모드</th><th>관리자 잠금</th></tr></thead>
   <tbody>${rows}</tbody>
 </table>`;
 }
@@ -177,12 +185,58 @@ function renderFeaturesRow(snapshot) {
     <tr><th>슬래시 등록</th><td>${escapeHtml(slash)}</td></tr>`;
 }
 
+function renderRemoteControlPanel(hasControl, defaultChannelId) {
+  const def = escapeHtml(defaultChannelId || "");
+  const disabledNote = hasControl
+    ? ""
+    : `<p class="warn">원격 제어 API가 연결되지 않았습니다. 봇 <code>index.js</code>를 최신으로 배포했는지 확인하세요.</p>`;
+  const buttons = hasControl
+    ? `<p class="btnRow">
+<button type="button" id="dashPostDef">조율판 게시 (기본)</button>
+<button type="button" id="dashPostSp">조율판 게시 (특수)</button>
+<button type="button" id="dashClose">최신 조율판 마감</button>
+<button type="button" id="dashSheet">시트→디스코드 동기화</button>
+</p>`
+    : "";
+  const hc = hasControl ? "true" : "false";
+  return `<div class="card">
+<h2>원격 제어</h2>
+<p class="muted">채널은 <code>GUILD_ID</code>와 같은 길드의 텍스트 채널만 가능합니다. (슬래시 <code>/일정생성</code>과 동일한 게시·<code>/일정마감</code>과 동일한 마감·<code>/시트불러오기</code>와 동일한 동기화)</p>
+${disabledNote}
+<p><label for="dashCh">채널 ID</label><br><input id="dashCh" class="inp" type="text" value="${def}" autocomplete="off" spellcheck="false" /></p>
+${buttons}
+<pre id="dashCtlOut" class="dashOut"></pre>
+</div>
+<script>
+(function(){
+  var pre = document.getElementById("dashCtlOut");
+  function show(obj){ pre.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); }
+  async function post(path, body){
+    var r = await fetch(path, { method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body||{}) });
+    var t = await r.text();
+    var j; try{ j = JSON.parse(t); }catch(e){ j = { _raw: t }; }
+    show({ http: r.status, body: j });
+  }
+  function ch(){ return (document.getElementById("dashCh")||{}).value.trim(); }
+  if(${hc}){
+    document.getElementById("dashPostDef").onclick = function(){ post("/dashboard/api/control/post-board", { channelId: ch(), mode: "default" }); };
+    document.getElementById("dashPostSp").onclick = function(){ post("/dashboard/api/control/post-board", { channelId: ch(), mode: "special" }); };
+    document.getElementById("dashClose").onclick = function(){ post("/dashboard/api/control/close-latest", { channelId: ch() }); };
+    document.getElementById("dashSheet").onclick = function(){ post("/dashboard/api/control/sheet-sync", {}); };
+  }
+})();
+</script>`;
+}
+
 /**
  * DASHBOARD_ENABLE=1 일 때 OAuth + 길드 관리자 전용 상태 페이지.
  * @param {import("discord.js").Client} discordClient
  * @param {{
  *   getActiveSessionCount?: () => number;
  *   getDashboardSnapshot?: () => Record<string, unknown>;
+ *   dashboardCloseLatestInChannel?: (channelId: string) => Promise<Record<string, unknown>>;
+ *   dashboardImportSheet?: () => Promise<Record<string, unknown>>;
+ *   dashboardPostBoard?: (channelId: string, mode: string) => Promise<Record<string, unknown>>;
  * }} [options]
  */
 function startDashboardIfEnabled(discordClient, options = {}) {
@@ -207,6 +261,14 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     typeof options.getActiveSessionCount === "function" ? options.getActiveSessionCount : null;
   const getDashboardSnapshot =
     typeof options.getDashboardSnapshot === "function" ? options.getDashboardSnapshot : null;
+  const dashboardCloseLatestInChannel =
+    typeof options.dashboardCloseLatestInChannel === "function"
+      ? options.dashboardCloseLatestInChannel
+      : null;
+  const dashboardImportSheet =
+    typeof options.dashboardImportSheet === "function" ? options.dashboardImportSheet : null;
+  const dashboardPostBoard =
+    typeof options.dashboardPostBoard === "function" ? options.dashboardPostBoard : null;
 
   const clientSecret = process.env.DISCORD_CLIENT_SECRET
     ? String(process.env.DISCORD_CLIENT_SECRET).trim()
@@ -388,6 +450,87 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     });
   });
 
+  const jsonBody = express.json({ limit: "48kb" });
+
+  function requireDashboardSessionJson(req, res, next) {
+    if (!req.session.dashboardUser?.id) {
+      res.status(401).json({ ok: false, error: "unauthorized" });
+      return;
+    }
+    next();
+  }
+
+  app.post(
+    "/dashboard/api/control/close-latest",
+    jsonBody,
+    requireDashboardSessionJson,
+    async (req, res) => {
+      if (!dashboardCloseLatestInChannel) {
+        res.status(501).json({ ok: false, error: "not_configured" });
+        return;
+      }
+      try {
+        const uid = req.session.dashboardUser.id;
+        const out = await dashboardCloseLatestInChannel(String(req.body?.channelId || ""));
+        if (out.ok) {
+          console.log(`[dashboard] control close-latest ok channel=${req.body?.channelId} by=${uid}`);
+        }
+        res.status(out.ok ? 200 : 400).json(out);
+      } catch (e) {
+        console.error("[dashboard] control close-latest:", e);
+        res.status(500).json({ ok: false, error: String(e.message || e) });
+      }
+    }
+  );
+
+  app.post(
+    "/dashboard/api/control/sheet-sync",
+    jsonBody,
+    requireDashboardSessionJson,
+    async (req, res) => {
+      if (!dashboardImportSheet) {
+        res.status(501).json({ ok: false, error: "not_configured" });
+        return;
+      }
+      try {
+        const uid = req.session.dashboardUser.id;
+        const out = await dashboardImportSheet();
+        console.log(`[dashboard] control sheet-sync by=${uid}`, out?.result || out);
+        res.json(out);
+      } catch (e) {
+        console.error("[dashboard] control sheet-sync:", e);
+        res.status(500).json({ ok: false, error: String(e.message || e) });
+      }
+    }
+  );
+
+  app.post(
+    "/dashboard/api/control/post-board",
+    jsonBody,
+    requireDashboardSessionJson,
+    async (req, res) => {
+      if (!dashboardPostBoard) {
+        res.status(501).json({ ok: false, error: "not_configured" });
+        return;
+      }
+      try {
+        const uid = req.session.dashboardUser.id;
+        const modeRaw = String(req.body?.mode || "default").toLowerCase();
+        const mode = modeRaw === "special" ? "special" : "default";
+        const out = await dashboardPostBoard(String(req.body?.channelId || ""), mode);
+        if (out.ok) {
+          console.log(
+            `[dashboard] control post-board ok mode=${mode} channel=${req.body?.channelId} by=${uid}`
+          );
+        }
+        res.status(out.ok ? 200 : 400).json(out);
+      } catch (e) {
+        console.error("[dashboard] control post-board:", e);
+        res.status(500).json({ ok: false, error: String(e.message || e) });
+      }
+    }
+  );
+
   app.get("/dashboard", (req, res) => {
     const du = req.session.dashboardUser;
     if (!du || !du.id) {
@@ -421,7 +564,16 @@ function startDashboardIfEnabled(discordClient, options = {}) {
         ? `<tr><th>활성 세션 수</th><td><code>${escapeHtml(String(sessionCount))}</code> <span class="muted">(맵 전체)</span></td></tr>`
         : "";
     const featuresHtml = renderFeaturesRow(snapshot);
-    const boardsHtml = renderBoardsSection(snapshot);
+    const boardsHtml = renderBoardsSection(snapshot, guildId);
+    const hasRemote =
+      Boolean(dashboardCloseLatestInChannel) &&
+      Boolean(dashboardImportSheet) &&
+      Boolean(dashboardPostBoard);
+    const defaultCh =
+      snapshot && snapshot.features && typeof snapshot.features.scheduleChannelId === "string"
+        ? snapshot.features.scheduleChannelId
+        : "";
+    const controlHtml = renderRemoteControlPanel(hasRemote, defaultCh);
 
     res.type("text/html; charset=utf-8").send(`<!DOCTYPE html>
 <html lang="ko">
@@ -448,6 +600,10 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     a { color: var(--link); }
     .muted { color: var(--muted); font-size: 0.88rem; }
     .warn { color: #f23f43; }
+    .inp { width: 100%; max-width: 28rem; padding: 0.45rem 0.6rem; background: #111214; border: 1px solid var(--border); color: var(--text); border-radius: 6px; box-sizing: border-box; }
+    .dashOut { margin-top: 0.75rem; padding: 0.75rem; background: #111214; border-radius: 6px; max-height: 16rem; overflow: auto; font-size: 0.8rem; white-space: pre-wrap; }
+    .btnRow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+    .btnRow button { padding: 0.4rem 0.75rem; cursor: pointer; border-radius: 6px; border: 1px solid var(--border); background: #404249; color: var(--text); }
   </style>
 </head>
 <body>
@@ -478,6 +634,8 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     <div class="card">
       ${boardsHtml}
     </div>
+
+    ${controlHtml}
 
     <p class="muted">OAuth 로그인한 계정은 <code>GUILD_ID</code> 길드에서 Administrator 여야 합니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
   </div>
