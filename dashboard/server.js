@@ -151,6 +151,9 @@ function renderFeaturesRow(snapshot) {
  */
 function startDashboardIfEnabled(discordClient, options = {}) {
   if (!isDashboardEnabled()) {
+    console.log(
+      "[dashboard] 비활성(DASHBOARD_ENABLE 이 1 또는 true 가 아님) — 3847 등 HTTP 대시보드는 뜨지 않습니다."
+    );
     const port = process.env.PORT;
     if (port) {
       startLegacyHealthServer(port);
@@ -169,10 +172,25 @@ function startDashboardIfEnabled(discordClient, options = {}) {
   const clientId = process.env.CLIENT_ID;
   const guildId = process.env.GUILD_ID;
 
-  if (!clientSecret || !redirectUri || !sessionSecret || !clientId || !guildId) {
+  const missing = [];
+  if (!clientSecret) {
+    missing.push("DISCORD_CLIENT_SECRET");
+  }
+  if (!redirectUri) {
+    missing.push("DASHBOARD_OAUTH_REDIRECT_URI");
+  }
+  if (!sessionSecret) {
+    missing.push("DASHBOARD_SESSION_SECRET");
+  }
+  if (!clientId) {
+    missing.push("CLIENT_ID");
+  }
+  if (!guildId) {
+    missing.push("GUILD_ID");
+  }
+  if (missing.length > 0) {
     console.warn(
-      "[dashboard] DASHBOARD_ENABLE 이지만 필수 env 가 비어 있어 대시보드를 건너뜁니다. " +
-        "DISCORD_CLIENT_SECRET, DASHBOARD_OAUTH_REDIRECT_URI, DASHBOARD_SESSION_SECRET, CLIENT_ID, GUILD_ID 를 채워 주세요."
+      `[dashboard] DASHBOARD_ENABLE=1 이지만 아래 변수가 비어 있어 대시보드를 건너뜁니다: ${missing.join(", ")}`
     );
     if (process.env.PORT) {
       startLegacyHealthServer(process.env.PORT);
