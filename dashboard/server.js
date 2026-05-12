@@ -228,6 +228,85 @@ ${buttons}
 </script>`;
 }
 
+const SCHED_DAY_KEYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+const SCHED_DAY_LABEL = { MON: "월", TUE: "화", WED: "수", THU: "목", FRI: "금", SAT: "토", SUN: "일" };
+
+/**
+ * @param {{
+ *   path: string;
+ *   workDates: string[];
+ *   holidayDates: string[];
+ *   blockedDayKeys: string[];
+ *   boardGuideText: string;
+ *   usesDefaultGuide: boolean;
+ * }} sf
+ * @param {boolean} hasSave
+ */
+function renderScheduleConfigPanel(sf, hasSave) {
+  const pathEsc = escapeHtml(sf.path || "");
+  const workLines = escapeHtml((sf.workDates || []).join("\n"));
+  const holLines = escapeHtml((sf.holidayDates || []).join("\n"));
+  const guideEsc = escapeHtml(sf.boardGuideText || "");
+  const chk = SCHED_DAY_KEYS.map((key) => {
+    const on = (sf.blockedDayKeys || []).includes(key);
+    const lab = SCHED_DAY_LABEL[key] || key;
+    return `<label class="schedLab"><input type="checkbox" class="dashSchedChk" data-dk="${key}" ${
+      on ? "checked" : ""
+    }/> ${escapeHtml(lab)}</label>`;
+  }).join("");
+  const warn = hasSave
+    ? ""
+    : `<p class="warn">저장 API가 연결되지 않았습니다. <code>index.js</code>의 <code>startDashboardIfEnabled</code>에 <code>saveDashboardScheduleConfig</code>가 있는지 확인하세요.</p>`;
+  const btn = hasSave
+    ? `<p class="btnRow"><button type="button" id="dashSchedSave">파일에 저장</button></p>`
+    : "";
+  const hc = hasSave ? "true" : "false";
+  return `<div class="card">
+<h2>일정 규칙 · 안내글</h2>
+<p class="muted">설정은 <code>USER_WORK_SCHEDULE_PATH</code>가 있으면 그 파일, 없으면 프로젝트 루트의 <code>user-work-schedule.json</code>에 저장됩니다. (봇 프로세스가 쓸 수 있는 경로여야 합니다.)</p>
+<p class="muted">저장한 <strong>요일 막기·휴일·추가 근무일</strong>은 곧바로 버튼 색에 반영됩니다. <strong>안내글</strong>은 <strong>새로 게시하는 조율판</strong> embed에만 적용됩니다.</p>
+${warn}
+<p><strong>파일</strong><br><code>${pathEsc || "—"}</code></p>
+<p><label for="dashHol">공휴일·휴무일 (YYYY-MM-DD)</label><br><span class="muted">조율 주 7일 안에 들어오는 이 날짜는, 주기상 근무일이어도 요일 버튼을 <strong>막지 않습니다</strong>.</span><br><textarea id="dashHol" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-05&#10;2026-10-03">${holLines}</textarea></p>
+<p><label for="dashWork">추가 근무일 (YYYY-MM-DD)</label><br><span class="muted">조율 주에 포함되면 해당 날의 요일 버튼이 <strong>빨강(선택 불가)</strong>으로 잡힙니다. (.env의 SCHEDULE_GLOBAL_WORK_DATES와 합쳐집니다.)</span><br><textarea id="dashWork" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-08">${workLines}</textarea></p>
+<p><strong>매주 막을 요일</strong> <span class="muted">(전역 — 주기와 무관하게 항상 빨강)</span></p>
+<p class="schedChkRow">${chk}</p>
+<p><label for="dashGuide">조율판 안내글 (<code>**안내**</code> 아래 전체)</label><br><span class="muted">비우고 저장하면 기본 문구로 돌아갑니다. Discord embed 한도로 약 ${2000}자까지.</span><br><textarea id="dashGuide" class="inp ta" rows="10" spellcheck="false" placeholder="(기본 안내 사용 중)">${guideEsc}</textarea></p>
+${btn}
+<pre id="dashSchedOut" class="dashOut"></pre>
+<script>
+(function(){
+  var pre = document.getElementById("dashSchedOut");
+  function show(obj){ pre.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); }
+  async function save(){
+    var nl = String.fromCharCode(10);
+    var hol = document.getElementById("dashHol").value;
+    var work = document.getElementById("dashWork").value;
+    var guide = document.getElementById("dashGuide").value;
+    var blocked = [];
+    document.querySelectorAll(".dashSchedChk").forEach(function(el){
+      if(el.checked) blocked.push(el.getAttribute("data-dk"));
+    });
+    var r = await fetch("/dashboard/api/schedule-config", { method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ holidayDates: hol, workDates: work, blockedDayKeys: blocked, boardGuideText: guide }) });
+    var t = await r.text();
+    var j; try{ j = JSON.parse(t); }catch(e){ j = { _raw: t }; }
+    show({ http: r.status, body: j });
+    if(r.ok && j && j.scheduleFile){
+      document.getElementById("dashHol").value = (j.scheduleFile.holidayDates||[]).join(nl);
+      document.getElementById("dashWork").value = (j.scheduleFile.workDates||[]).join(nl);
+      document.getElementById("dashGuide").value = j.scheduleFile.boardGuideText || "";
+      var setB = new Set(j.scheduleFile.blockedDayKeys||[]);
+      document.querySelectorAll(".dashSchedChk").forEach(function(el){
+        el.checked = setB.has(el.getAttribute("data-dk"));
+      });
+    }
+  }
+  if(${hc}){ document.getElementById("dashSchedSave").onclick = save; }
+})();
+</script>
+</div>`;
+}
+
 /**
  * DASHBOARD_ENABLE=1 일 때 OAuth + 길드 관리자 전용 상태 페이지.
  * @param {import("discord.js").Client} discordClient
@@ -237,6 +316,7 @@ ${buttons}
  *   dashboardCloseLatestInChannel?: (channelId: string) => Promise<Record<string, unknown>>;
  *   dashboardImportSheet?: () => Promise<Record<string, unknown>>;
  *   dashboardPostBoard?: (channelId: string, mode: string) => Promise<Record<string, unknown>>;
+ *   saveDashboardScheduleConfig?: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
  * }} [options]
  */
 function startDashboardIfEnabled(discordClient, options = {}) {
@@ -269,6 +349,10 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     typeof options.dashboardImportSheet === "function" ? options.dashboardImportSheet : null;
   const dashboardPostBoard =
     typeof options.dashboardPostBoard === "function" ? options.dashboardPostBoard : null;
+  const saveDashboardScheduleConfig =
+    typeof options.saveDashboardScheduleConfig === "function"
+      ? options.saveDashboardScheduleConfig
+      : null;
 
   const clientSecret = process.env.DISCORD_CLIENT_SECRET
     ? String(process.env.DISCORD_CLIENT_SECRET).trim()
@@ -531,6 +615,29 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     }
   );
 
+  app.post(
+    "/dashboard/api/schedule-config",
+    jsonBody,
+    requireDashboardSessionJson,
+    async (req, res) => {
+      if (!saveDashboardScheduleConfig) {
+        res.status(501).json({ ok: false, error: "not_configured" });
+        return;
+      }
+      try {
+        const uid = req.session.dashboardUser.id;
+        const out = await saveDashboardScheduleConfig(req.body || {});
+        if (out.ok) {
+          console.log(`[dashboard] schedule-config saved by=${uid}`);
+        }
+        res.status(out.ok ? 200 : 400).json(out);
+      } catch (e) {
+        console.error("[dashboard] schedule-config:", e);
+        res.status(500).json({ ok: false, error: String(e.message || e) });
+      }
+    }
+  );
+
   app.get("/dashboard", (req, res) => {
     const du = req.session.dashboardUser;
     if (!du || !du.id) {
@@ -574,6 +681,18 @@ function startDashboardIfEnabled(discordClient, options = {}) {
         ? snapshot.features.scheduleChannelId
         : "";
     const controlHtml = renderRemoteControlPanel(hasRemote, defaultCh);
+    const sf =
+      snapshot && snapshot.scheduleFile && typeof snapshot.scheduleFile === "object"
+        ? snapshot.scheduleFile
+        : {
+            path: "",
+            workDates: [],
+            holidayDates: [],
+            blockedDayKeys: [],
+            boardGuideText: "",
+            usesDefaultGuide: true,
+          };
+    const schedHtml = renderScheduleConfigPanel(sf, Boolean(saveDashboardScheduleConfig));
 
     res.type("text/html; charset=utf-8").send(`<!DOCTYPE html>
 <html lang="ko">
@@ -604,6 +723,9 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     .dashOut { margin-top: 0.75rem; padding: 0.75rem; background: #111214; border-radius: 6px; max-height: 16rem; overflow: auto; font-size: 0.8rem; white-space: pre-wrap; }
     .btnRow { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
     .btnRow button { padding: 0.4rem 0.75rem; cursor: pointer; border-radius: 6px; border: 1px solid var(--border); background: #404249; color: var(--text); }
+    .ta { font-family: ui-monospace, monospace; font-size: 0.85rem; line-height: 1.45; }
+    .schedChkRow { display: flex; flex-wrap: wrap; gap: 0.65rem 1rem; align-items: center; margin: 0.35rem 0 0.75rem; }
+    .schedLab { font-size: 0.9rem; cursor: pointer; user-select: none; }
   </style>
 </head>
 <body>
@@ -634,6 +756,8 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     <div class="card">
       ${boardsHtml}
     </div>
+
+    ${schedHtml}
 
     ${controlHtml}
 

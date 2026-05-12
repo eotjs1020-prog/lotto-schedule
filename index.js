@@ -27,6 +27,19 @@ const DAYS = [
   { key: "SUN", label: "일" },
 ];
 const VALID_DAY_KEYS = new Set(DAYS.map((d) => d.key));
+
+/** 조율판 embed **안내** 블록 기본 문구 (`user-work-schedule.json` 의 `global.boardGuideText` 로 덮어쓸 수 있음) */
+const DEFAULT_BOARD_GUIDE = [
+  "요일 버튼으로 먼저 대상 요일을 선택한 뒤, 시간 버튼으로 해당 요일 시간을 선택해 주세요. (복수 선택 가능)",
+  "",
+  "🔴 **빨간색으로 표시된 요일은 선택할 수 없습니다.**",
+  "조율 주간(일자): 수요일 ~ 다음 주 화요일까지 한 주로 표시됩니다. (자동 마감 시각은 봇 설정·크론과 같습니다.)",
+  "진행 기준: 가장 많은 인원이 선택한 시간대를 선정합니다.",
+  "진행 시점: 차주 아이온2 정기점검 종료 후, 확정된 시간에 진행됩니다.",
+].join("\n");
+
+const BOARD_GUIDE_MAX_LEN = 2000;
+
 /** 조율판 일자: 한 주의 시작을 수요일로 두고 MON=+5 … TUE=+6 (수~화 7일) */
 const DAY_OFFSET_FROM_WEDNESDAY = {
   WED: 0,
@@ -348,12 +361,28 @@ function getMergedRepeatCycleConfigForComputation() {
   return cfg;
 }
 
+/** `global.holidayDates`: 조율 주에 들어오는 달력 날짜는 주기상 근무여도 요일 버튼을 막지 않음(공휴일·사내 휴무 등). */
+function getHolidayDateSetFromGlobal() {
+  const g = userWorkScheduleCache.global;
+  if (!g || typeof g !== "object" || !Array.isArray(g.holidayDates)) {
+    return new Set();
+  }
+  return new Set(
+    g.holidayDates
+      .map((x) => String(x).trim())
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+  );
+}
+
 /** 조율판과 동일한 수~화 7일 구간에서 달력상 근무인 날의 요일 버튼만 막기 (전역 주기만 사용; 한 주 안에 근무·휴무가 1~3일씩 끊겨 보이는 것은 6일 주기를 7일 창으로 자른 자연스러운 결과) */
 function computeCycleBlockedWeekdayKeysForSession(session) {
   const cfg = getMergedRepeatCycleConfigForComputation();
   if (!cfg) {
     return new Set();
   }
+
+  loadUserWorkScheduleMap();
+  const holidaySet = getHolidayDateSetFromGlobal();
 
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso } = getVoteWindowIsoForSession(sourceSession);
@@ -362,6 +391,9 @@ function computeCycleBlockedWeekdayKeysForSession(session) {
 
   for (let i = 0; i < 7; i++) {
     const iso = addCalendarDaysToIsoYmd(voteStartIso, i);
+    if (holidaySet.has(iso)) {
+      continue;
+    }
     if (isCalendarDateWorkDay(iso, cfg)) {
       const key = weekdayKeyFromIsoYmd(iso, tz);
       if (key) {
@@ -1700,14 +1732,15 @@ function buildSummaryEmbed(session) {
     );
   }
 
-  const guideText = [
-    "요일 버튼으로 먼저 대상 요일을 선택한 뒤, 시간 버튼으로 해당 요일 시간을 선택해 주세요. (복수 선택 가능)",
-    "",
-    "🔴 **빨간색으로 표시된 요일은 선택할 수 없습니다.**",
-    "조율 주간(일자): 수요일 ~ 다음 주 화요일까지 한 주로 표시됩니다. (자동 마감 시각은 봇 설정·크론과 같습니다.)",
-    "진행 기준: 가장 많은 인원이 선택한 시간대를 선정합니다.",
-    "진행 시점: 차주 아이온2 정기점검 종료 후, 확정된 시간에 진행됩니다.",
-  ].join("\n");
+  loadUserWorkScheduleMap();
+  const g = userWorkScheduleCache.global;
+  let guideText = DEFAULT_BOARD_GUIDE;
+  if (g && typeof g === "object" && typeof g.boardGuideText === "string") {
+    const t = g.boardGuideText.trim();
+    if (t.length > 0) {
+      guideText = t.slice(0, BOARD_GUIDE_MAX_LEN);
+    }
+  }
 
   const head = [];
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
@@ -2290,6 +2323,131 @@ if (!process.env.DISCORD_TOKEN) {
   process.exit(1);
 }
 
+function parseIsoDateListInput(value) {
+  const raw = Array.isArray(value) ? value.join("\n") : String(value ?? "");
+  const parts = raw
+    .split(/[\s,\n\r，、]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  for (const p of parts) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(p)) {
+      continue;
+    }
+    if (seen.has(p)) {
+      continue;
+    }
+    seen.add(p);
+    out.push(p);
+    if (out.length > 220) {
+      break;
+    }
+  }
+  return out;
+}
+
+function getDashboardScheduleFileForSnapshot() {
+  loadUserWorkScheduleMap();
+  const pathResolved = userWorkScheduleCache.resolvedPath || getUserWorkSchedulePath();
+  const g = userWorkScheduleCache.global;
+  const empty = {
+    path: pathResolved,
+    workDates: [],
+    holidayDates: [],
+    blockedDayKeys: [],
+    boardGuideText: "",
+    usesDefaultGuide: true,
+  };
+  if (!g || typeof g !== "object") {
+    return empty;
+  }
+  const workDates = Array.isArray(g.workDates)
+    ? [...new Set(g.workDates.map((x) => String(x).trim()).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort()
+    : [];
+  const holidayDates = Array.isArray(g.holidayDates)
+    ? [...new Set(g.holidayDates.map((x) => String(x).trim()).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort()
+    : [];
+  const blockedDayKeys = Array.isArray(g.blockedDayKeys)
+    ? [...new Set(g.blockedDayKeys.map((k) => String(k).toUpperCase()).filter((k) => VALID_DAY_KEYS.has(k)))].sort()
+    : [];
+  const guideRaw = typeof g.boardGuideText === "string" ? g.boardGuideText : "";
+  const usesDefaultGuide = !guideRaw.trim();
+  return {
+    path: pathResolved,
+    workDates,
+    holidayDates,
+    blockedDayKeys,
+    boardGuideText: guideRaw,
+    usesDefaultGuide,
+  };
+}
+
+function saveDashboardScheduleFile(body) {
+  try {
+    const workDates = parseIsoDateListInput(body?.workDates);
+    const holidayDates = parseIsoDateListInput(body?.holidayDates);
+    const blockedRaw = body?.blockedDayKeys;
+    const blockedSet = new Set();
+    if (Array.isArray(blockedRaw)) {
+      for (const k of blockedRaw) {
+        const u = String(k).toUpperCase();
+        if (VALID_DAY_KEYS.has(u)) {
+          blockedSet.add(u);
+        }
+      }
+    }
+    const blockedDayKeys = [...blockedSet].sort();
+
+    const boardGuideText = typeof body?.boardGuideText === "string" ? body.boardGuideText : "";
+    if (boardGuideText.length > BOARD_GUIDE_MAX_LEN) {
+      return { ok: false, error: "guide_too_long", max: BOARD_GUIDE_MAX_LEN };
+    }
+
+    const resolvedPath = getUserWorkSchedulePath();
+    let base = { users: {}, global: {} };
+    if (fs.existsSync(resolvedPath)) {
+      try {
+        base = JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
+      } catch (parseErr) {
+        return { ok: false, error: "invalid_json", message: String(parseErr.message || parseErr) };
+      }
+    }
+    if (!base || typeof base !== "object") {
+      base = { users: {}, global: {} };
+    }
+    if (!base.users || typeof base.users !== "object") {
+      base.users = {};
+    }
+    const prevGlobal = base.global && typeof base.global === "object" ? { ...base.global } : {};
+    const nextGlobal = { ...prevGlobal };
+    nextGlobal.workDates = workDates;
+    nextGlobal.holidayDates = holidayDates;
+    if (blockedDayKeys.length > 0) {
+      nextGlobal.blockedDayKeys = blockedDayKeys;
+    } else {
+      delete nextGlobal.blockedDayKeys;
+    }
+    const trimmedGuide = boardGuideText.trim();
+    if (trimmedGuide) {
+      nextGlobal.boardGuideText = trimmedGuide;
+    } else {
+      delete nextGlobal.boardGuideText;
+    }
+    const out = { ...base, users: base.users, global: nextGlobal };
+    if (typeof base.__doc__ === "string") {
+      out.__doc__ = base.__doc__;
+    }
+    fs.writeFileSync(resolvedPath, JSON.stringify(out, null, 2), "utf8");
+    userWorkScheduleCache.mtimeMs = -1;
+    loadUserWorkScheduleMap();
+    console.log(`[dashboard] user-work-schedule 저장: ${resolvedPath}`);
+    return { ok: true, scheduleFile: getDashboardScheduleFileForSnapshot() };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
 function getDashboardSnapshot() {
   const boards = [];
   for (const session of sessions.values()) {
@@ -2319,6 +2477,7 @@ function getDashboardSnapshot() {
       sheetsLive: Boolean(process.env.GOOGLE_SPREADSHEET_ID && process.env.GOOGLE_SHEET_LIVE_RANGE),
       guildSlash: Boolean(process.env.GUILD_ID),
     },
+    scheduleFile: getDashboardScheduleFileForSnapshot(),
   };
 }
 
@@ -2391,6 +2550,7 @@ try {
     dashboardCloseLatestInChannel: (cid) => dashboardControlCloseLatestInChannel(cid),
     dashboardImportSheet: () => dashboardControlImportSheet(),
     dashboardPostBoard: (cid, mode) => dashboardControlPostBoard(cid, mode),
+    saveDashboardScheduleConfig: (body) => saveDashboardScheduleFile(body),
   });
 } catch (err) {
   console.warn(
