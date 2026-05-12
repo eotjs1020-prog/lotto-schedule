@@ -442,7 +442,7 @@ function renderBoardsSection(snapshot, guildIdForLinks) {
   const gid = guildIdForLinks ? escapeHtml(String(guildIdForLinks)) : "";
   const rows = snapshot.boards
     .map((b) => {
-      const mode = b.priorWeek ? "특수(+7)" : "기본(+14)";
+      const mode = b.priorWeek ? "특수(+0)" : "기본(+7)";
       const locks =
         b.manualLockedKeys && b.manualLockedKeys.length > 0
           ? b.manualLockedKeys.map(dayKeyToKoreanLabel).join(", ")
@@ -643,7 +643,7 @@ function renderDashboardLayout(activeTab, docTitle, ctx, mainInnerHtml) {
   <main class="dash-main">
     ${mainInnerHtml}
   </main>
-  <p class="footer-note">접속: <code>GUILD_ID</code> 길드의 <strong>Administrator</strong> 이거나, <code>DASHBOARD_ACCESS_USER_IDS</code> / <code>DASHBOARD_ACCESS_ROLE_IDS</code>(.env)에 해당하는 경우입니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
+  <p class="footer-note">접속: <code>GUILD_ID</code> 길드의 <strong>Administrator</strong> 이거나, <code>DASHBOARD_ACCESS_USER_IDS</code> / <code>DASHBOARD_ACCESS_ROLE_IDS</code>(.env)에 해당하는 경우입니다. 빨강 요일은 대시보드 JSON만 반영합니다. 봇 재시작 시 메모리 조율판은 초기화됩니다.</p>
 </body>
 </html>`;
 }

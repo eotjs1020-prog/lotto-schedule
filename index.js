@@ -1,7 +1,6 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 const fs = require("fs");
-const cron = require("node-cron");
 const { google } = require("googleapis");
 const {
   ActionRowBuilder,
@@ -33,7 +32,7 @@ const DEFAULT_BOARD_GUIDE = [
   "요일 버튼으로 먼저 대상 요일을 선택한 뒤, 시간 버튼으로 해당 요일 시간을 선택해 주세요. (복수 선택 가능)",
   "",
   "🔴 **빨간색으로 표시된 요일은 선택할 수 없습니다.**",
-  "조율 주간(일자): 수요일 ~ 다음 주 화요일까지 한 주로 표시됩니다. (자동 마감 시각은 봇 설정·크론과 같습니다.)",
+  "조율 주간(일자): 수요일 ~ 다음 주 화요일까지 한 주로 표시됩니다.",
   "진행 기준: 가장 많은 인원이 선택한 시간대를 선정합니다.",
   "진행 시점: 차주 아이온2 정기점검 종료 후, 확정된 시간에 진행됩니다.",
 ].join("\n");
@@ -115,7 +114,7 @@ function loadUserWorkScheduleMap() {
 
     userWorkScheduleCache = { users, global: globalCfg, mtimeMs: stat.mtimeMs, resolvedPath };
     console.log(
-      `근무일 버튼 차단 설정 로드: 사용자 ${Object.keys(users).length}명, 전역 규칙 ${globalCfg ? "있음" : "없음"} (${resolvedPath})`
+      `user-work-schedule.json 로드: 사용자 ${Object.keys(users).length}명, 전역 규칙 ${globalCfg ? "있음" : "없음"} (${resolvedPath})`
     );
     return users;
   } catch (error) {
@@ -131,17 +130,6 @@ function loadUserWorkScheduleMap() {
     console.error("user-work-schedule.json 로드 실패:", error.message || error);
     return {};
   }
-}
-
-/** 달력 날짜가 `workDates` 목록에 있으면 조율 주에서 해당 요일 버튼을 막기 위한 "근무일"로 취급 */
-function isCalendarDateWorkDay(isoYmd, cfg) {
-  if (!cfg || typeof cfg !== "object") {
-    return false;
-  }
-  if (!Array.isArray(cfg.workDates)) {
-    return false;
-  }
-  return cfg.workDates.some((d) => typeof d === "string" && d === isoYmd);
 }
 
 /** .env SCHEDULE_GLOBAL_WORK_DATES=2026-05-08,2026-05-09 (Asia/Seoul 달력 기준) */
@@ -189,7 +177,7 @@ function getWednesdayIsoContaining(isoYmd) {
   return isoYmd;
 }
 
-/** .env `SCHEDULE_GLOBAL_WORK_DATES` + JSON `global.workDates` 합친 달력 근무일 목록 (조율 주 7일 안에서만 요일 막기에 사용) */
+/** .env `SCHEDULE_GLOBAL_WORK_DATES` + JSON `global.workDates` 합친 달력 근무일 목록 (표시·시트 등; 요일 버튼 빨강과는 무관) */
 function getMergedWorkDatesConfigForComputation() {
   loadUserWorkScheduleMap();
   const g = userWorkScheduleCache.global;
@@ -217,50 +205,7 @@ function getMergedWorkDatesConfigForComputation() {
   };
 }
 
-/** `global.holidayDates`: 조율 주에 들어오는 달력 날짜는 근무일 목록에 있어도 요일 버튼을 막지 않음(공휴일·사내 휴무 등). */
-function getHolidayDateSetFromGlobal() {
-  const g = userWorkScheduleCache.global;
-  if (!g || typeof g !== "object" || !Array.isArray(g.holidayDates)) {
-    return new Set();
-  }
-  return new Set(
-    g.holidayDates
-      .map((x) => String(x).trim())
-      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-  );
-}
-
-/** 조율판과 동일한 수~화 7일 구간에서, `workDates`에 해당하는 달력 날의 요일 버튼만 막기 */
-function computeWorkDateBlockedWeekdayKeysForSession(session) {
-  const cfg = getMergedWorkDatesConfigForComputation();
-  if (!cfg) {
-    return new Set();
-  }
-
-  loadUserWorkScheduleMap();
-  const holidaySet = getHolidayDateSetFromGlobal();
-
-  const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
-  const { voteStartIso } = getVoteWindowIsoForSession(sourceSession);
-  const blocked = new Set();
-  const tz = cfg.timezone || SCHEDULE_TZ;
-
-  for (let i = 0; i < 7; i++) {
-    const iso = addCalendarDaysToIsoYmd(voteStartIso, i);
-    if (holidaySet.has(iso)) {
-      continue;
-    }
-    if (isCalendarDateWorkDay(iso, cfg)) {
-      const key = weekdayKeyFromIsoYmd(iso, tz);
-      if (key) {
-        blocked.add(key);
-      }
-    }
-  }
-  return blocked;
-}
-
-/** 요일 버튼 막기: MON,TUE,... (.env SCHEDULE_BLOCKED_DAY_KEYS + JSON global.blockedDayKeys만, 달력 근무일 목록 계산 제외) */
+/** .env SCHEDULE_BLOCKED_DAY_KEYS 파싱 (로그 안내용; 요일 빨강에는 사용하지 않음) */
 function parseEnvBlockedDayKeysSet() {
   const raw = process.env.SCHEDULE_BLOCKED_DAY_KEYS;
   if (!raw || !String(raw).trim()) {
@@ -276,11 +221,10 @@ function parseEnvBlockedDayKeysSet() {
   return set;
 }
 
-function getStaticBlockedDayKeysFromEnvAndJson() {
-  const merged = new Set(parseEnvBlockedDayKeysSet());
-
+/** 대시보드에서 저장한 `user-work-schedule.json` global.blockedDayKeys 만 반영 (.env·근무일·슬래시 잠금 없음) */
+function getDashboardGlobalBlockedDayKeysSet() {
+  const merged = new Set();
   loadUserWorkScheduleMap();
-
   const g = userWorkScheduleCache.global;
   if (g && typeof g === "object" && Array.isArray(g.blockedDayKeys)) {
     for (const k of g.blockedDayKeys) {
@@ -289,11 +233,10 @@ function getStaticBlockedDayKeysFromEnvAndJson() {
       }
     }
   }
-
   return merged;
 }
 
-/** 세션에만 붙는 관리자 지정 빨간(잠금) 요일 — 전역 근무일·.env·JSON과 합산 */
+/** 세션별 관리자 잠금 집합(레거시; 슬래시 제거로 항상 비어 있음) */
 function getSessionManualLockedDayKeysSet(session) {
   if (!session.manualLockedDayKeys) {
     session.manualLockedDayKeys = new Set();
@@ -306,56 +249,12 @@ function getSessionManualLockedDayKeysSet(session) {
   return session.manualLockedDayKeys;
 }
 
-/** "MON,WED" "월,수" "월 화" 등 → MON..SUN 집합 */
-function parseAdminScheduleDayKeysInput(raw) {
-  const out = new Set();
-  if (raw === undefined || raw === null || !String(raw).trim()) {
-    return out;
-  }
-  const labelToKey = Object.fromEntries(DAYS.map((d) => [d.label, d.key]));
-  const parts = String(raw)
-    .split(/[\s,，、]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  for (let part of parts) {
-    part = part.replace(/요일$/u, "");
-    const upper = part.toUpperCase();
-    if (VALID_DAY_KEYS.has(upper)) {
-      out.add(upper);
-      continue;
-    }
-    if (labelToKey[part]) {
-      out.add(labelToKey[part]);
-    }
-  }
-  return out;
+function getMergedBlockedDayKeysForSession(_session) {
+  return new Set(getDashboardGlobalBlockedDayKeysSet());
 }
 
-function getMergedBlockedDayKeysForSession(session) {
-  const merged = new Set(getStaticBlockedDayKeysFromEnvAndJson());
-  for (const k of computeWorkDateBlockedWeekdayKeysForSession(session)) {
-    merged.add(k);
-  }
-  for (const k of getSessionManualLockedDayKeysSet(session)) {
-    merged.add(k);
-  }
-  return merged;
-}
-
-function mergeBlockedDayKeysForSessionAndUser(session, userId) {
-  const merged = new Set(getMergedBlockedDayKeysForSession(session));
-
-  loadUserWorkScheduleMap();
-  const ucfg = userWorkScheduleCache.users[userId];
-  if (ucfg && typeof ucfg === "object" && Array.isArray(ucfg.blockedDayKeys)) {
-    for (const k of ucfg.blockedDayKeys) {
-      if (typeof k === "string" && VALID_DAY_KEYS.has(k.toUpperCase())) {
-        merged.add(k.toUpperCase());
-      }
-    }
-  }
-
-  return merged;
+function mergeBlockedDayKeysForSessionAndUser(session, _userId) {
+  return new Set(getMergedBlockedDayKeysForSession(session));
 }
 
 /** @returns {Set<string> | null} null이면 제한 없음 */
@@ -410,12 +309,12 @@ const commands = [
   new SlashCommandBuilder()
     .setName("일정생성")
     .setDescription(
-      "주간(수~화, 한국 달력) 요일/시간 참여를 조율판으로 생성합니다. 투표 주간은 게시 블록 시작 수요일 기준 2주 뒤 수요일이 첫날인 7일입니다."
+      "주간(수~화, 한국 달력) 요일/시간 참여를 조율판으로 생성합니다. 투표 주간은 게시 블록 시작 수요일 기준 1주 뒤 수요일이 첫날인 7일입니다."
     )
     .addStringOption((option) =>
       option
         .setName("모드")
-        .setDescription("비우면 기본(투표 주 2주 뒤 수 시작). 특수는 1주 앞(일정생성특수와 동일).")
+        .setDescription("비우면 기본(투표 주 1주 뒤 수 시작). 특수는 그보다 1주 앞(게시 주의 수요일 시작).")
         .setRequired(false)
         .addChoices(
           { name: "기본", value: "default" },
@@ -425,63 +324,17 @@ const commands = [
   new SlashCommandBuilder()
     .setName("일정생성특수")
     .setDescription(
-      "일정생성(기본)보다 투표·조율 주간이 1주 앞섭니다. 게시 수~화 블록 기준 다음 수요일이 시작하는 주입니다."
+      "일정생성(기본)보다 투표·조율 주간이 1주 앞섭니다. 게시 수~화 블록이 속한 주의 수요일이 투표 주 시작입니다."
     ),
   new SlashCommandBuilder()
     .setName("schedule_special")
     .setDescription(
-      "Same as /일정생성특수 — vote Wed–Tue window is one week earlier than /일정생성 default (Korean UI fallback)."
+      "Same as /일정생성특수 — vote Wed–Tue window starts one week earlier than /일정생성 default."
     ),
   new SlashCommandBuilder()
     .setName("일정마감")
     .setDescription("현재 채널의 최신 조율판을 즉시 마감하고 집계를 확정합니다.")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder()
-    .setName("조율요일잠금")
-    .setDescription(
-      "현재 채널 최신 조율판에 빨간(선택 불가) 요일을 관리자가 직접 지정합니다. 전역 근무일 목록·시트 잠금과 합쳐집니다."
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption((option) =>
-      option
-        .setName("동작")
-        .setDescription("추가·제거·설정(덮어쓰기)·초기화 중 하나")
-        .setRequired(true)
-        .addChoices(
-          { name: "추가", value: "add" },
-          { name: "제거", value: "remove" },
-          { name: "설정", value: "set" },
-          { name: "초기화", value: "clear" }
-        )
-    )
-    .addStringOption((option) =>
-      option
-        .setName("요일")
-        .setDescription("MON,WED 또는 월,수 — 초기화일 때는 비워도 됩니다.")
-        .setRequired(false)
-    ),
-  new SlashCommandBuilder()
-    .setName("schedule_lock_days")
-    .setDescription("Admin: add/remove/set/clear red (locked) weekday buttons on the latest schedule in this channel.")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addStringOption((option) =>
-      option
-        .setName("action")
-        .setDescription("add | remove | set (replace) | clear")
-        .setRequired(true)
-        .addChoices(
-          { name: "add", value: "add" },
-          { name: "remove", value: "remove" },
-          { name: "set", value: "set" },
-          { name: "clear", value: "clear" }
-        )
-    )
-    .addStringOption((option) =>
-      option
-        .setName("days")
-        .setDescription("MON,WED or comma-separated. Omit for clear.")
-        .setRequired(false)
-    ),
   new SlashCommandBuilder()
     .setName("시트불러오기")
     .setDescription(
@@ -532,7 +385,7 @@ function makeSessionId() {
 /**
  * @param {{ createdAtMs?: number; priorWeekVoteWindow?: boolean }} [options]
  *   createdAtMs — 세션 생성 시각(기본: 지금). 테스트·크론 등에서만 지정.
- *   priorWeekVoteWindow — true면 기본보다 수~화 주간이 1주 앞섬(블록 시작 수+7일). false면 기본(+14일, 예전 기본 +7에서 1주 추가).
+ *   priorWeekVoteWindow — true면 투표 주 시작 수요일이 기본보다 1주 앞(게시 주와 같은 수요일 시작).
  */
 function registerSession(createdBy, channelId = null, options = {}) {
   const createdAt =
@@ -1749,8 +1602,8 @@ function formatYearMonthLabelFromIsoYmd(isoYmd) {
 function getVoteWindowIsoForSession(session) {
   const postDayIso = formatCalendarDateInTz(session.createdAt, SCHEDULE_TZ);
   const thisBlockWednesdayIso = getWednesdayIsoContaining(postDayIso);
-  /** 기본(/일정생성): 게시 블록 시작 수요일 +14일. 일정생성특수: +7일(기본보다 1주 앞, 예전 기본과 동일). */
-  const wednesdayOffsetDays = session.priorWeekVoteWindow === true ? 7 : 14;
+  /** 기본(/일정생성): 게시 블록 시작 수요일 +7일. 일정생성특수: +0일(게시 주의 수요일이 투표 주 시작). */
+  const wednesdayOffsetDays = session.priorWeekVoteWindow === true ? 0 : 7;
   const weekWednesdayIso = addCalendarDaysToIsoYmd(thisBlockWednesdayIso, wednesdayOffsetDays);
   const voteStartIso = weekWednesdayIso;
   const voteEndIso = addCalendarDaysToIsoYmd(weekWednesdayIso, 6);
@@ -2044,12 +1897,6 @@ async function runWeeklyCloseJob(client, logPrefix = "[크론]") {
 }
 
 function startWeeklyCron(client) {
-  const channelId = process.env.SCHEDULE_CHANNEL_ID;
-  if (!channelId) {
-    console.log("SCHEDULE_CHANNEL_ID 없음 — 주간 자동 일정/마감 크론을 등록하지 않습니다.");
-    return;
-  }
-
   if (process.env.SCHEDULE_SMOKE_TEST === "1") {
     console.warn(
       "[스모크] SCHEDULE_SMOKE_TEST=1 — 실제 수·일 크론은 등록하지 않습니다. 약 3초 후 게시, 25초 후 마감을 한 번 실행합니다. 끝나면 .env에서 제거하세요."
@@ -2058,21 +1905,8 @@ function startWeeklyCron(client) {
     setTimeout(() => runWeeklyCloseJob(client, "[스모크]"), 25000);
     return;
   }
-
-  cron.schedule(
-    "0 0 * * 3",
-    () => runWeeklyOpenJob(client),
-    { timezone: SCHEDULE_TZ }
-  );
-
-  cron.schedule(
-    "59 23 * * 0",
-    () => runWeeklyCloseJob(client),
-    { timezone: SCHEDULE_TZ }
-  );
-
   console.log(
-    `주간 크론 등록됨 (${SCHEDULE_TZ}): 수요일 00:00 게시, 일요일 23:59 마감·집계 → 채널 ${channelId}`
+    "수요일 자동 조율판 게시·일요일 마감 크론은 사용하지 않습니다. (수동 /일정생성 또는 대시보드 원격 제어를 사용하세요.)"
   );
 }
 
@@ -2091,27 +1925,25 @@ client.once(Events.ClientReady, async (readyClient) => {
   const mergedCfg = getMergedWorkDatesConfigForComputation();
   if (mergedCfg?.workDates?.length) {
     console.log(
-      `근무일 목록(workDates + SCHEDULE_GLOBAL_WORK_DATES): ${mergedCfg.workDates.length}개 — 조율판 수~화 7일 안에 포함된 날의 요일 버튼만 빨강으로 막음`
+      `근무일 목록(workDates + SCHEDULE_GLOBAL_WORK_DATES): ${mergedCfg.workDates.length}개 — 요일 버튼 빨강에는 쓰지 않음(대시보드 global.blockedDayKeys 만 반영)`
     );
   }
   const envBlockedDays = parseEnvBlockedDayKeysSet();
   if (envBlockedDays.size > 0) {
-    console.log(`요일 버튼 차단(.env): ${[...envBlockedDays].join(", ")}`);
+    console.log(
+      `요일 버튼 차단(.env SCHEDULE_BLOCKED_DAY_KEYS): ${[...envBlockedDays].join(", ")} — 대시보드 JSON만 반영하므로 적용되지 않습니다.`
+    );
   }
   const gb = userWorkScheduleCache.global?.blockedDayKeys;
   if (Array.isArray(gb) && gb.length > 0) {
-    console.log(`요일 버튼 차단(JSON global): ${gb.filter((x) => typeof x === "string").join(", ")}`);
+    console.log(`요일 버튼 차단(대시보드 JSON global.blockedDayKeys): ${gb.filter((x) => typeof x === "string").join(", ")}`);
   }
   const schedulePath = getUserWorkSchedulePath();
   const examplePath = path.join(__dirname, "user-work-schedule.example.json");
   try {
-    if (
-      envBlockedDays.size === 0 &&
-      fs.existsSync(examplePath) &&
-      !fs.existsSync(schedulePath)
-    ) {
+    if (!fs.existsSync(schedulePath) && fs.existsSync(examplePath)) {
       console.warn(
-        "요일 버튼 차단이 안 되면: 예시 파일 이름을 user-work-schedule.json 으로 복사하거나, .env에 SCHEDULE_BLOCKED_DAY_KEYS=TUE,WED,THU 를 넣은 뒤 봇을 재시작하세요."
+        "대시보드에서 막을 요일을 쓰려면 user-work-schedule.json 을 두거나 대시보드에서 저장해 global.blockedDayKeys 를 채우세요."
       );
     }
   } catch (_) {
@@ -2242,91 +2074,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           /* interaction may already be invalid */
         }
       }
-      return;
-    }
-
-    if (
-      interaction.commandName === "조율요일잠금" ||
-      interaction.commandName === "schedule_lock_days"
-    ) {
-      if (!interactionMemberIsAdministrator(interaction)) {
-        await interaction.reply({
-          content: "이 명령어는 서버 관리자만 사용할 수 있어요.",
-          ephemeral: true,
-        });
-        return;
-      }
-      const latest = findLatestSessionInChannel(interaction.channelId);
-      if (!latest) {
-        await interaction.reply({
-          content:
-            "이 채널에 활성 조율판이 없어요. 먼저 /일정생성 또는 /일정생성특수로 조율판을 만든 뒤 다시 시도해 주세요.",
-          ephemeral: true,
-        });
-        return;
-      }
-      const action =
-        interaction.commandName === "조율요일잠금"
-          ? interaction.options.getString("동작", true)
-          : interaction.options.getString("action", true);
-      const rawDays =
-        interaction.commandName === "조율요일잠금"
-          ? interaction.options.getString("요일")
-          : interaction.options.getString("days");
-      const parsed = parseAdminScheduleDayKeysInput(rawDays ?? "");
-      const lockSet = getSessionManualLockedDayKeysSet(latest);
-
-      if (action === "clear") {
-        lockSet.clear();
-      } else if (action === "set") {
-        if (parsed.size === 0) {
-          await interaction.reply({
-            content: "설정(덮어쓰기)에는 요일을 한 개 이상 넣어 주세요. 예: `월,수` 또는 `MON,WED`",
-            ephemeral: true,
-          });
-          return;
-        }
-        lockSet.clear();
-        for (const k of parsed) {
-          lockSet.add(k);
-        }
-      } else if (action === "add") {
-        if (parsed.size === 0) {
-          await interaction.reply({
-            content: "추가할 요일을 넣어 주세요. 예: `금` 또는 `FRI`",
-            ephemeral: true,
-          });
-          return;
-        }
-        for (const k of parsed) {
-          lockSet.add(k);
-        }
-      } else if (action === "remove") {
-        if (parsed.size === 0) {
-          await interaction.reply({
-            content: "제거할 요일을 넣어 주세요.",
-            ephemeral: true,
-          });
-          return;
-        }
-        for (const k of parsed) {
-          lockSet.delete(k);
-        }
-      }
-
-      await refreshScheduleBoardMessage(interaction.client, latest);
-
-      const summary = [...lockSet]
-        .sort()
-        .map((k) => {
-          const meta = DAYS.find((d) => d.key === k);
-          return meta ? `${meta.label}요일` : k;
-        })
-        .join(", ");
-      await interaction.reply({
-        content: `조율판 버튼을 갱신했어요.\n현재 관리자 잠금: ${summary || "없음"}`,
-        ephemeral: true,
-      });
       return;
     }
 
@@ -2690,7 +2437,7 @@ function getDashboardSnapshot() {
     activeSessionCount: sessions.size,
     boards,
     features: {
-      scheduleCron: Boolean(process.env.SCHEDULE_CHANNEL_ID),
+      scheduleCron: false,
       scheduleChannelId: process.env.SCHEDULE_CHANNEL_ID ? String(process.env.SCHEDULE_CHANNEL_ID).trim() : "",
       sheetsLive: Boolean(process.env.GOOGLE_SPREADSHEET_ID && process.env.GOOGLE_SHEET_LIVE_RANGE),
       guildSlash: Boolean(process.env.GUILD_ID),
