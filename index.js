@@ -1,6 +1,5 @@
 require("dotenv").config();
 const fs = require("fs");
-const http = require("http");
 const path = require("path");
 const cron = require("node-cron");
 const { google } = require("googleapis");
@@ -28,6 +27,16 @@ const DAYS = [
   { key: "SUN", label: "일" },
 ];
 const VALID_DAY_KEYS = new Set(DAYS.map((d) => d.key));
+/** 조율판 일자: 한 주의 시작을 수요일로 두고 MON=+5 … TUE=+6 (수~화 7일) */
+const DAY_OFFSET_FROM_WEDNESDAY = {
+  WED: 0,
+  THU: 1,
+  FRI: 2,
+  SAT: 3,
+  SUN: 4,
+  MON: 5,
+  TUE: 6,
+};
 const TIME_SLOTS = ["19:00", "19:30", "20:00", "20:30", "21:00"];
 
 const sessions = new Map();
@@ -269,6 +278,17 @@ function getMondayIsoContaining(isoYmd) {
   return isoYmd;
 }
 
+/** 해당 날짜가 속한 **수~화** 주간의 시작 수요일 (한국 달력 기준) */
+function getWednesdayIsoContaining(isoYmd) {
+  for (let back = 0; back < 7; back++) {
+    const cand = addCalendarDaysToIsoYmd(isoYmd, -back);
+    if (weekdayKeyFromIsoYmd(cand, SCHEDULE_TZ) === "WED") {
+      return cand;
+    }
+  }
+  return isoYmd;
+}
+
 /**
  * 조율판이 가리키는 '투표 대상 주'의 월요일.
  * 기본 1 = 게시글이 올라온 주의 다음 주(월~일). SCHEDULE_VOTE_WEEK_OFFSET_WEEKS=0 이면 같은 주.
@@ -450,10 +470,19 @@ function isUserAllowedScheduleButtons(userId) {
 const commands = [
   new SlashCommandBuilder()
     .setName("일정생성")
-    .setDescription("주간(월~일) 요일/시간 참여 여부를 조율판으로 생성합니다."),
+    .setDescription("주간(수~화, 한국 달력) 요일/시간 참여 여부를 조율판으로 생성합니다."),
+  new SlashCommandBuilder()
+    .setName("일정생성특수")
+    .setDescription("일정생성과 동일합니다. (수~화 주간·다음 주 기준 등 같은 규칙, 별도 명령으로 구분용.)"),
   new SlashCommandBuilder()
     .setName("일정마감")
     .setDescription("현재 채널의 최신 조율판을 즉시 마감하고 집계를 확정합니다.")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
+    .setName("시트불러오기")
+    .setDescription(
+      "실시간 Google 시트(GOOGLE_SHEET_LIVE_RANGE)를 읽어 같은 투표 주간의 조율판 임베드를 갱신합니다."
+    )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map((command) => command.toJSON());
 
@@ -491,7 +520,15 @@ function makeSessionId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function registerSession(createdBy, channelId = null) {
+/**
+ * @param {{ createdAtMs?: number }} [options]
+ *   createdAtMs — 세션 생성 시각(기본: 지금). 테스트·크론 등에서만 지정.
+ */
+function registerSession(createdBy, channelId = null, options = {}) {
+  const createdAt =
+    typeof options.createdAtMs === "number" && Number.isFinite(options.createdAtMs)
+      ? options.createdAtMs
+      : Date.now();
   const sessionId = makeSessionId();
   const session = {
     id: sessionId,
@@ -499,7 +536,7 @@ function registerSession(createdBy, channelId = null) {
     createdBy,
     channelId,
     messageId: null,
-    createdAt: Date.now(),
+    createdAt,
   };
   sessions.set(sessionId, session);
   return { sessionId, session };
@@ -840,6 +877,358 @@ function scheduleLiveSheetSync(session) {
   liveSyncTimers.set(sessionId, timer);
 }
 
+function getScheduleSheetUserMapFromEnv() {
+  const raw = process.env.SCHEDULE_SHEET_USER_MAP;
+  if (!raw || !String(raw).trim()) {
+    return {};
+  }
+  try {
+    const j = JSON.parse(raw);
+    if (typeof j !== "object" || j === null || Array.isArray(j)) {
+      return {};
+    }
+    return j;
+  } catch {
+    return {};
+  }
+}
+
+function rowStrings(row) {
+  return (row || []).map((c) => String(c ?? "").trim());
+}
+
+function isScheduleSheetHeaderRowCells(cells) {
+  return cells[0] === "참여자" && cells[1] === "시작일" && cells[2] === "마감일";
+}
+
+function isSheetMarkO(cell) {
+  const u = String(cell ?? "")
+    .trim()
+    .toUpperCase();
+  return u === "O" || u === "Y" || u === "TRUE" || u === "1" || u === "✓" || u === "V";
+}
+
+/**
+ * 실시간 시트 값 → 참가자 블록. `buildSheetRowsForSession` 출력과 동일한 표 형식을 가정합니다.
+ * @returns {{ startLabel: string; endLabel: string; blocks: Array<{ displayName: string; selectedDayTimes: Map<string, Set<string>> }>; explicitEmpty: boolean } | null}
+ */
+function parseLiveSheetValuesToParticipants(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return null;
+  }
+
+  const blocks = [];
+  let explicitEmpty = false;
+  let sheetStart = null;
+  let sheetEnd = null;
+
+  let curName = null;
+  let curStart = null;
+  let curEnd = null;
+  /** @type {Map<string, Set<string>>} */
+  const curMap = new Map();
+  const timeSet = new Set(TIME_SLOTS);
+
+  function flush() {
+    if (curName === "참여자 없음") {
+      explicitEmpty = true;
+      sheetStart = curStart;
+      sheetEnd = curEnd;
+      curName = null;
+      curStart = null;
+      curEnd = null;
+      curMap.clear();
+      return;
+    }
+    if (!curName) {
+      curMap.clear();
+      curStart = null;
+      curEnd = null;
+      return;
+    }
+    const dayTimes = new Map();
+    for (const [k, s] of curMap) {
+      dayTimes.set(k, new Set(s));
+    }
+    blocks.push({
+      displayName: curName,
+      startLabel: curStart,
+      endLabel: curEnd,
+      selectedDayTimes: dayTimes,
+    });
+    if (!sheetStart && curStart && curEnd) {
+      sheetStart = curStart;
+      sheetEnd = curEnd;
+    }
+    curName = null;
+    curStart = null;
+    curEnd = null;
+    curMap.clear();
+  }
+
+  let i = 0;
+  if (values[0] && isScheduleSheetHeaderRowCells(rowStrings(values[0]))) {
+    i = 1;
+  }
+
+  for (; i < values.length; i++) {
+    const cells = rowStrings(values[i]);
+    if (cells.every((x) => !x)) {
+      continue;
+    }
+    if (isScheduleSheetHeaderRowCells(cells)) {
+      flush();
+      continue;
+    }
+
+    const c0 = cells[0];
+    const c1 = cells[1];
+    const c2 = cells[2];
+    const time = cells[3];
+
+    if (c0 === "참여자 없음") {
+      flush();
+      curName = "참여자 없음";
+      curStart = c1;
+      curEnd = c2;
+      flush();
+      continue;
+    }
+
+    if (!timeSet.has(time)) {
+      continue;
+    }
+
+    if (c0) {
+      flush();
+      curName = c0;
+      curStart = c1;
+      curEnd = c2;
+    } else if (!curName) {
+      continue;
+    }
+
+    for (let d = 0; d < DAYS.length; d++) {
+      if (isSheetMarkO(cells[4 + d])) {
+        const dk = DAYS[d].key;
+        if (!curMap.has(dk)) {
+          curMap.set(dk, new Set());
+        }
+        curMap.get(dk).add(time);
+      }
+    }
+  }
+  flush();
+
+  const startLabel = blocks[0]?.startLabel ?? sheetStart;
+  const endLabel = blocks[0]?.endLabel ?? sheetEnd;
+  if (!startLabel || !endLabel) {
+    return null;
+  }
+
+  return {
+    startLabel,
+    endLabel,
+    blocks: explicitEmpty && blocks.length === 0 ? [] : blocks,
+    explicitEmpty,
+  };
+}
+
+function sessionVoteWindowLabelsMatchSheet(session, startLabel, endLabel) {
+  const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
+  const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
+  return (
+    formatIsoYmdForBoard(voteStartIso) === startLabel && formatIsoYmdForBoard(voteEndIso) === endLabel
+  );
+}
+
+function resolveSheetParticipantToUserId(displayNameRaw, session) {
+  const raw = String(displayNameRaw ?? "").trim();
+  if (!raw || raw === "참여자 없음") {
+    return null;
+  }
+  if (/^\d{17,20}$/.test(raw)) {
+    return raw;
+  }
+  const pipe = raw.indexOf("|");
+  if (pipe >= 0) {
+    const right = raw.slice(pipe + 1).trim();
+    if (/^\d{17,20}$/.test(right)) {
+      return right;
+    }
+  }
+  const envMap = getScheduleSheetUserMapFromEnv();
+  const fromMap = envMap[raw];
+  if (fromMap != null && /^\d{17,20}$/.test(String(fromMap).trim())) {
+    return String(fromMap).trim();
+  }
+  for (const [uid, ud] of session.users) {
+    if ((ud.username || "").trim() === raw) {
+      return uid;
+    }
+  }
+  return null;
+}
+
+function displayNameForSheetParticipant(displayNameRaw, userId, session) {
+  const raw = String(displayNameRaw ?? "").trim();
+  const pipe = raw.indexOf("|");
+  if (pipe >= 0) {
+    const left = raw.slice(0, pipe).trim();
+    if (left) {
+      return left;
+    }
+  }
+  return session.users.get(userId)?.username || raw;
+}
+
+function dayTimeMapsEqual(a, b) {
+  const mapA = a instanceof Map ? a : new Map();
+  const mapB = b instanceof Map ? b : new Map();
+  const keysA = [...mapA.keys()].sort().join("\0");
+  const keysB = [...mapB.keys()].sort().join("\0");
+  if (keysA !== keysB) {
+    return false;
+  }
+  for (const k of mapB.keys()) {
+    const sa = [...(mapA.get(k) || [])].sort().join(",");
+    const sb = [...(mapB.get(k) || [])].sort().join(",");
+    if (sa !== sb) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** 시트 내용을 세션에 반영. 변경이 있으면 true */
+function applyParsedLiveSheetToSession(session, parsed) {
+  if (parsed.explicitEmpty && parsed.blocks.length === 0) {
+    let changed = false;
+    for (const [, ud] of session.users) {
+      const m = ud.selectedDayTimes;
+      if (m instanceof Map && m.size > 0) {
+        ud.selectedDayTimes = new Map();
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  let changed = false;
+  const unresolved = new Set();
+
+  for (const block of parsed.blocks) {
+    const uid = resolveSheetParticipantToUserId(block.displayName, session);
+    if (!uid) {
+      unresolved.add(block.displayName);
+      continue;
+    }
+    const displayName = displayNameForSheetParticipant(block.displayName, uid, session);
+    getOrCreateUserData(session, uid, displayName);
+    const ud = session.users.get(uid);
+    const newMap = new Map();
+    for (const [dk, set] of block.selectedDayTimes) {
+      if (VALID_DAY_KEYS.has(dk)) {
+        newMap.set(dk, new Set(set));
+      }
+    }
+    if (!dayTimeMapsEqual(ud.selectedDayTimes, newMap)) {
+      ud.selectedDayTimes = newMap;
+      changed = true;
+    }
+    if (ud.username !== displayName) {
+      ud.username = displayName;
+      changed = true;
+    }
+  }
+
+  if (unresolved.size > 0) {
+    console.warn(
+      "[실시간시트→디스코드] 참가자 ID를 알 수 없어 건너뜀(닉네임·SCHEDULE_SHEET_USER_MAP·표시|유저ID 형식):",
+      [...unresolved].join(", ")
+    );
+  }
+
+  return changed;
+}
+
+/**
+ * GOOGLE_SHEET_LIVE_RANGE 시트를 읽어, 투표 주간이 일치하는 활성 세션의 임베드·버튼을 갱신합니다.
+ * @returns {{ matched: number; edited: number; parseError?: string }}
+ */
+async function importLiveSheetToDiscordSessions(client) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const liveRange = process.env.GOOGLE_SHEET_LIVE_RANGE;
+  const out = { matched: 0, edited: 0, parseError: undefined };
+
+  if (!spreadsheetId || !liveRange) {
+    out.parseError = "no_sheet_config";
+    return out;
+  }
+
+  const sheets = await getSheetsClient();
+  if (!sheets) {
+    out.parseError = "no_sheets_client";
+    return out;
+  }
+
+  const maxRows = Math.min(
+    Math.max(20, Number.parseInt(process.env.SCHEDULE_SHEET_IMPORT_MAX_ROWS ?? "300", 10) || 300),
+    2000
+  );
+  const readRange = getLiveSyncValuesOnlyRange(liveRange, maxRows);
+
+  let values;
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: readRange,
+    });
+    values = res.data.values;
+  } catch (error) {
+    console.warn("[실시간시트→디스코드] 시트 읽기 실패:", error?.message || error);
+    out.parseError = "fetch_failed";
+    return out;
+  }
+
+  const parsed = parseLiveSheetValuesToParticipants(values);
+  if (!parsed) {
+    out.parseError = "parse_failed";
+    return out;
+  }
+
+  for (const [sessionId, session] of sessions) {
+    if (!session.messageId || !session.channelId) {
+      continue;
+    }
+    if (!sessionVoteWindowLabelsMatchSheet(session, parsed.startLabel, parsed.endLabel)) {
+      continue;
+    }
+    out.matched += 1;
+    const changed = applyParsedLiveSheetToSession(session, parsed);
+    if (!changed) {
+      continue;
+    }
+    try {
+      const channel = await client.channels.fetch(session.channelId);
+      if (!channel || !channel.isTextBased()) {
+        continue;
+      }
+      const msg = await channel.messages.fetch(session.messageId);
+      await msg.edit({
+        embeds: [buildSummaryEmbed(session)],
+        components: buildComponents(sessionId, session),
+      });
+      out.edited += 1;
+      scheduleLiveSheetSync(session);
+    } catch (error) {
+      console.warn("[실시간시트→디스코드] 메시지 수정 실패:", sessionId, error?.message || error);
+    }
+  }
+
+  return out;
+}
+
 function findLatestSessionInChannel(channelId) {
   let latestSession = null;
   for (const session of sessions.values()) {
@@ -908,11 +1297,39 @@ function formatIsoYmdForBoard(isoYmd) {
   return formatBoardDate(utcNoon);
 }
 
+/** 기준일(수) 달력과 맞춘 연·월 라벨, 임베드 제목 등에 사용 */
+function formatYearMonthLabelFromIsoYmd(isoYmd) {
+  const [y, m, d] = isoYmd.split("-").map(Number);
+  const utcNoon = Date.UTC(y, m - 1, d, 12, 0, 0);
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: SCHEDULE_TZ,
+    year: "numeric",
+    month: "long",
+  }).format(new Date(utcNoon));
+}
+
 function getVoteWindowIsoForSession(session) {
-  const voteStartIso = formatCalendarDateInTz(session.createdAt, SCHEDULE_TZ);
-  const weekMondayIso = getMondayIsoContaining(voteStartIso);
-  const voteEndIso = addCalendarDaysToIsoYmd(weekMondayIso, 6);
-  return { voteStartIso, voteEndIso };
+  const postDayIso = formatCalendarDateInTz(session.createdAt, SCHEDULE_TZ);
+  const thisBlockWednesdayIso = getWednesdayIsoContaining(postDayIso);
+  /** 게시(또는 세션 생성)일이 속한 수~화 블록의 **다음 주** 수~화 (기준일·투표 구간·집계 일자 공통) */
+  const weekWednesdayIso = addCalendarDaysToIsoYmd(thisBlockWednesdayIso, 7);
+  const voteStartIso = weekWednesdayIso;
+  const voteEndIso = addCalendarDaysToIsoYmd(weekWednesdayIso, 6);
+  const referenceWednesdayIso = weekWednesdayIso;
+  return { voteStartIso, voteEndIso, referenceWednesdayIso, weekWednesdayIso };
+}
+
+function getBoardWeekWednesdayIsoFromSession(session) {
+  const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
+  return getVoteWindowIsoForSession(sourceSession).weekWednesdayIso;
+}
+
+/** 임베드 집계 줄용: 수요일 시작 주간의 해당 요일 + 일자 */
+function formatDayAggregateHeadline(day, weekWednesdayIso) {
+  const off = DAY_OFFSET_FROM_WEDNESDAY[day.key] ?? 0;
+  const iso = addCalendarDaysToIsoYmd(weekWednesdayIso, off);
+  const dom = Number.parseInt(iso.split("-")[2], 10);
+  return `${dom}일 ${day.label}요일`;
 }
 
 function buildComponents(sessionId, session) {
@@ -1008,10 +1425,11 @@ function getMentionsForTime(session, time) {
 }
 
 function buildDetailText(session) {
+  const weekWednesdayIso = getBoardWeekWednesdayIsoFromSession(session);
   const lines = ["집계 현황표", "", "[요일별 시간표]"];
   for (const day of DAYS) {
     const mentions = getMentionsForDay(session, day.key);
-    lines.push(`- ${day.label}요일 (${mentions.length}명)`);
+    lines.push(`- ${formatDayAggregateHeadline(day, weekWednesdayIso)} (${mentions.length}명)`);
     lines.push(`  참가자: ${mentions.length > 0 ? mentions.join(", ") : "없음"}`);
     for (const time of TIME_SLOTS) {
       const dayTimeMentions = [];
@@ -1046,11 +1464,12 @@ function formatDayTimeSlotVotesHoriz(session, dayKey) {
 }
 
 function buildViewCountText(session) {
+  const weekWednesdayIso = getBoardWeekWednesdayIsoFromSession(session);
   const lines = ["집계 현황표", "", "[요일별 투표 인원]"];
   for (const day of DAYS) {
     const dayCount = getMentionsForDay(session, day.key).length;
     lines.push(
-      `- ${day.label}요일: ${dayCount}명\n${formatDayTimeSlotVotesHoriz(session, day.key)}`
+      `- ${formatDayAggregateHeadline(day, weekWednesdayIso)}: ${dayCount}명\n${formatDayTimeSlotVotesHoriz(session, day.key)}`
     );
   }
   return lines.join("\n");
@@ -1069,12 +1488,13 @@ function getSpreadsheetUrl() {
 }
 
 function buildSummaryEmbed(session) {
+  const weekWednesdayIso = getBoardWeekWednesdayIsoFromSession(session);
   const lines = [];
 
   for (const day of DAYS) {
     const mentions = getMentionsForDay(session, day.key);
     lines.push(
-      `- ${day.label}요일: ${mentions.length}명\n${formatDayTimeSlotVotesHoriz(session, day.key)}`
+      `- ${formatDayAggregateHeadline(day, weekWednesdayIso)}: ${mentions.length}명\n${formatDayTimeSlotVotesHoriz(session, day.key)}`
     );
   }
 
@@ -1082,24 +1502,29 @@ function buildSummaryEmbed(session) {
     "요일 버튼으로 먼저 대상 요일을 선택한 뒤, 시간 버튼으로 해당 요일 시간을 선택해 주세요. (복수 선택 가능)",
     "",
     "🔴 **빨간색으로 표시된 요일은 선택할 수 없습니다.**",
-    "집계 기간: 매주 수요일 ~ 일요일 23:59까지",
+    "조율 주간(일자): 수요일 ~ 다음 주 화요일까지 한 주로 표시됩니다. (자동 마감 시각은 봇 설정·크론과 같습니다.)",
     "진행 기준: 가장 많은 인원이 선택한 시간대를 선정합니다.",
     "진행 시점: 차주 아이온2 정기점검 종료 후, 확정된 시간에 진행됩니다.",
   ].join("\n");
 
   const head = [];
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
-  const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
-  head.push(`**시작일**\n${formatIsoYmdForBoard(voteStartIso)}`);
+  const { voteStartIso, voteEndIso, referenceWednesdayIso } = getVoteWindowIsoForSession(sourceSession);
+  head.push(
+    `**기준일**\n기준 날짜 이후로 진행될 침식 요일/시간을 선택하는 투표입니다.\n${formatIsoYmdForBoard(referenceWednesdayIso)}`
+  );
   head.push("");
-  head.push(`**마감일**\n${formatIsoYmdForBoard(voteEndIso)}`);
+  head.push(
+    `**투표시작/마감일**\n${formatIsoYmdForBoard(voteStartIso)} - ${formatIsoYmdForBoard(voteEndIso)}`
+  );
   head.push("");
   head.push(`**안내**\n${guideText}`);
   head.push("");
   const description = [...head, ...lines].join("\n");
 
+  const titleMonth = formatYearMonthLabelFromIsoYmd(referenceWednesdayIso);
   return new EmbedBuilder()
-    .setTitle("요일/시간 조율")
+    .setTitle(`요일/시간 조율 · ${titleMonth}`)
     .setDescription(description)
     .setColor(0x5865f2)
     .setFooter({ text: "요일 버튼으로 대상 요일 선택 -> 시간 버튼으로 해당 요일 시간 선택/해제" });
@@ -1259,6 +1684,18 @@ client.once(Events.ClientReady, async (readyClient) => {
     console.error("명령어 등록 실패:", error);
   }
   startWeeklyCron(readyClient);
+
+  const sheetImportSec = Number.parseInt(process.env.SCHEDULE_SHEET_IMPORT_INTERVAL_SEC ?? "0", 10);
+  if (Number.isFinite(sheetImportSec) && sheetImportSec > 0) {
+    if (process.env.GOOGLE_SPREADSHEET_ID && process.env.GOOGLE_SHEET_LIVE_RANGE) {
+      setInterval(() => {
+        importLiveSheetToDiscordSessions(readyClient).catch((e) => {
+          console.warn("[실시간시트→디스코드] 폴링 오류:", e?.message || e);
+        });
+      }, sheetImportSec * 1000);
+      console.log(`실시간 시트 → 디스코드 폴링: ${sheetImportSec}초마다`);
+    }
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -1281,25 +1718,78 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      await closeSessionAndPublishSummary(client, latestSession, "[수동마감]");
-      await interaction.reply({
-        content: "최신 조율판을 마감하고 집계를 확정했어요.",
-        ephemeral: true,
-      });
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        await closeSessionAndPublishSummary(client, latestSession, "[수동마감]");
+        await interaction.editReply({
+          content: "최신 조율판을 마감하고 집계를 확정했어요.",
+        });
+      } catch (err) {
+        console.error("[일정마감] 처리 실패:", err);
+        try {
+          await interaction.editReply({
+            content: "마감 처리 중 오류가 났어요. 로그를 확인해 주세요.",
+          });
+        } catch (_) {
+          /* interaction may already be invalid */
+        }
+      }
       return;
     }
 
-    if (interaction.commandName !== "일정생성") {
+    if (interaction.commandName === "시트불러오기") {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({
+          content: "이 명령어는 관리자만 사용할 수 있어요.",
+          ephemeral: true,
+        });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        const r = await importLiveSheetToDiscordSessions(client);
+        let text;
+        if (r.parseError === "no_sheet_config") {
+          text = "GOOGLE_SPREADSHEET_ID 또는 GOOGLE_SHEET_LIVE_RANGE 가 없어 시트를 읽을 수 없어요.";
+        } else if (r.parseError === "no_sheets_client") {
+          text = "Google 서비스 계정(GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY)이 없어요.";
+        } else if (r.parseError === "fetch_failed") {
+          text = "시트를 읽지 못했어요. 스프레드시트 공유·범위를 확인해 주세요.";
+        } else if (r.parseError === "parse_failed") {
+          text = "시트 형식을 해석하지 못했어요. 봇이 쓰는 표(참여자/시작일/마감일/시간/요일 열)와 같은지 확인해 주세요.";
+        } else if (r.matched === 0) {
+          text =
+            "시트의 시작일·마감일과 같은 투표 주간을 가진 활성 조율판이 없어요. (다른 주간 시트이거나 조율판이 없을 수 있어요.)";
+        } else if (r.edited === 0) {
+          text = `주간이 맞는 조율판은 ${r.matched}개인데, 변경할 내용이 없거나 시트 표시명을 디스코드 유저와 연결하지 못했어요. SCHEDULE_SHEET_USER_MAP JSON 또는 A열 \`표시명|유저ID\` 형식을 쓰면 됩니다.`;
+        } else {
+          text = `시트 내용을 ${r.edited}개 조율판 메시지에 반영했어요.`;
+        }
+        await interaction.editReply({ content: text });
+      } catch (err) {
+        console.error("[시트불러오기] 실패:", err);
+        try {
+          await interaction.editReply({
+            content: "처리 중 오류가 났어요. 로그를 확인해 주세요.",
+          });
+        } catch (_) {
+          /* ignore */
+        }
+      }
       return;
     }
 
+    if (interaction.commandName !== "일정생성" && interaction.commandName !== "일정생성특수") {
+      return;
+    }
+
+    await interaction.deferReply();
     const { sessionId, session } = registerSession(interaction.user.id, interaction.channelId);
 
     const embed = buildSummaryEmbed(session);
-    const message = await interaction.reply({
+    const message = await interaction.editReply({
       embeds: [embed],
       components: buildComponents(sessionId, session),
-      fetchReply: true,
     });
 
     session.messageId = message.id;
@@ -1445,15 +1935,7 @@ if (!process.env.DISCORD_TOKEN) {
 
 client.login(process.env.DISCORD_TOKEN);
 
-// Render Web Service free tier needs an open port.
-const port = process.env.PORT;
-if (port) {
-  http
-    .createServer((req, res) => {
-      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("Bot is running");
-    })
-    .listen(port, () => {
-      console.log(`Health server listening on port ${port}`);
-    });
-}
+const { startDashboardIfEnabled } = require("./dashboard/server");
+startDashboardIfEnabled(client, {
+  getActiveSessionCount: () => sessions.size,
+});
