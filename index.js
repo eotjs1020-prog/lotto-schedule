@@ -86,6 +86,28 @@ function addCalendarDaysToIsoYmd(isoYmd, deltaDays) {
   return formatCalendarDateInTz(ms, SCHEDULE_TZ);
 }
 
+/** ISO 날짜(YYYY-MM-DD)를 서울 달력 그날로 본 뒤, `session.createdAt` 계산에 쓸 UTC 정오 ms */
+function isoYmdToCreatedAtUtcNoonMs(isoYmd) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoYmd)) {
+    return NaN;
+  }
+  const [y, m, d] = isoYmd.split("-").map(Number);
+  return Date.UTC(y, m - 1, d, 12, 0, 0);
+}
+
+/**
+ * 투표 주가 시작하는 수요일(서울) `voteStartWedIso`에 맞추기 위한 `createdAt` ms.
+ * 기본 모드: 게시일이 속한 수~화 블록의 수요일 +7 = 투표 시작이므로 게시 **달력일**은 그보다 7일 앞 수요일.
+ * 특수 모드: +0 이므로 게시 달력일 = 투표 시작 수요일.
+ */
+function createdAtMsForVoteStartWednesday(voteStartWedIso, priorWeekVoteWindow) {
+  if (priorWeekVoteWindow) {
+    return isoYmdToCreatedAtUtcNoonMs(voteStartWedIso);
+  }
+  const postDayIso = addCalendarDaysToIsoYmd(voteStartWedIso, -7);
+  return isoYmdToCreatedAtUtcNoonMs(postDayIso);
+}
+
 function loadUserWorkScheduleMap() {
   const resolvedPath = getUserWorkSchedulePath();
   try {
@@ -2487,15 +2509,35 @@ async function dashboardControlImportSheet() {
   return { ok: true, result: r };
 }
 
-async function dashboardControlPostBoard(channelId, mode) {
+async function dashboardControlPostBoard(channelId, mode, referenceWednesdayIso) {
   const v = await dashboardAssertGuildChannel(channelId);
   if (!v.ok) {
     return v;
   }
   const priorWeek = mode === "special";
-  const { sessionId, session } = registerSession(client.user.id, v.channel.id, {
-    priorWeekVoteWindow: priorWeek,
-  });
+  const refRaw =
+    referenceWednesdayIso !== undefined && referenceWednesdayIso !== null
+      ? String(referenceWednesdayIso).trim()
+      : "";
+  const opts = { priorWeekVoteWindow: priorWeek };
+  if (refRaw) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(refRaw)) {
+      return { ok: false, error: "invalid_reference_wednesday", detail: "YYYY-MM-DD 형식이어야 합니다." };
+    }
+    if (weekdayKeyFromIsoYmd(refRaw, SCHEDULE_TZ) !== "WED") {
+      return {
+        ok: false,
+        error: "invalid_reference_wednesday",
+        detail: "Asia/Seoul 기준 수요일만 선택할 수 있습니다.",
+      };
+    }
+    const createdAtMs = createdAtMsForVoteStartWednesday(refRaw, priorWeek);
+    if (!Number.isFinite(createdAtMs)) {
+      return { ok: false, error: "invalid_reference_wednesday", detail: "날짜를 해석하지 못했습니다." };
+    }
+    opts.createdAtMs = createdAtMs;
+  }
+  const { sessionId, session } = registerSession(client.user.id, v.channel.id, opts);
   const message = await v.channel.send({
     embeds: [buildSummaryEmbed(session)],
     components: buildComponents(sessionId, session),
@@ -2514,7 +2556,7 @@ try {
     getDashboardSnapshot,
     dashboardCloseLatestInChannel: (cid) => dashboardControlCloseLatestInChannel(cid),
     dashboardImportSheet: () => dashboardControlImportSheet(),
-    dashboardPostBoard: (cid, mode) => dashboardControlPostBoard(cid, mode),
+    dashboardPostBoard: (cid, mode, refIso) => dashboardControlPostBoard(cid, mode, refIso),
     saveDashboardScheduleConfig: (body) => saveDashboardScheduleFile(body),
   });
 } catch (err) {

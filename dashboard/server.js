@@ -173,6 +173,33 @@ code {
 }
 .sched-pill:has(input:checked) { background: var(--red); }
 .sched-pill:has(input:focus-visible) { outline: 2px solid var(--link); outline-offset: 2px; }
+.sched-pill--radio {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 5.25rem;
+  padding: 8px 10px;
+  border-radius: 3px;
+  background: #3c3f45;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  margin: 2px 6px 2px 0;
+}
+.sched-pill--radio input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+.sched-pill--radio:has(input:checked) { background: var(--blurple); }
+.sched-pill--radio:has(input:focus-visible) { outline: 2px solid var(--link); outline-offset: 2px; }
 .dashOut {
   margin-top: 12px;
   padding: 12px;
@@ -503,6 +530,11 @@ function renderRemoteControlPanel(hasControl, defaultChannelId) {
 ${disabledNote}
 <label class="form-label" for="dashCh">채널 ID</label>
 <input id="dashCh" class="inp" type="text" value="${def}" autocomplete="off" spellcheck="false" />
+<label class="form-label" for="dashRefMonth">투표 주 시작 수요일 (선택, 서울 달력)</label>
+<p class="embed__desc" style="margin-top:4px">월을 고른 뒤 수요일 하나를 고르면 그 주가 조율판 <strong>기준·투표 시작</strong>으로 올라갑니다. 월을 비우거나 수요일을 고르지 않으면 지금 시각 기준(기존과 동일)입니다.</p>
+<input type="hidden" id="dashRefWedIso" value="" />
+<input type="month" id="dashRefMonth" class="inp" style="max-width:12rem;margin-top:6px" />
+<div id="dashWedPickRow" class="sched-pill-row" style="margin-top:10px"></div>
 ${buttons}
 <pre id="dashCtlOut" class="dashOut"></pre>
 </article>
@@ -517,9 +549,72 @@ ${buttons}
     show({ http: r.status, body: j });
   }
   function ch(){ return (document.getElementById("dashCh")||{}).value.trim(); }
+  var TZ = "Asia/Seoul";
+  function isoWeekdayShortSeoul(iso){
+    var p = iso.split("-");
+    var ms = Date.UTC(Number(p[0]), Number(p[1])-1, Number(p[2]), 12, 0, 0);
+    return new Intl.DateTimeFormat("en-US",{timeZone:TZ,weekday:"short"}).format(new Date(ms));
+  }
+  function listWednesdaysInMonth(ym){
+    var p = ym.split("-");
+    if(p.length<2) return [];
+    var y = Number(p[0]), m = Number(p[1]);
+    var out = [];
+    for(var d=1; d<=31; d++){
+      var mm = m<10 ? "0"+m : ""+m;
+      var dd = d<10 ? "0"+d : ""+d;
+      var iso = y+"-"+mm+"-"+dd;
+      var ms = Date.UTC(y, m-1, d, 12, 0, 0);
+      if(new Date(ms).getUTCMonth() !== m-1) break;
+      if(isoWeekdayShortSeoul(iso)==="Wed") out.push(iso);
+    }
+    return out;
+  }
+  function rebuildWednesdays(){
+    var row = document.getElementById("dashWedPickRow");
+    var hid = document.getElementById("dashRefWedIso");
+    if(!row||!hid) return;
+    row.innerHTML = "";
+    hid.value = "";
+    var ymEl = document.getElementById("dashRefMonth");
+    var ym = ymEl ? ymEl.value : "";
+    if(!ym) return;
+    listWednesdaysInMonth(ym).forEach(function(iso){
+      var p = iso.split("-");
+      var dom = String(Number(p[2]));
+      var lab = document.createElement("label");
+      lab.className = "sched-pill--radio";
+      var inp = document.createElement("input");
+      inp.type = "radio";
+      inp.name = "dashWedPick";
+      inp.value = iso;
+      lab.appendChild(inp);
+      lab.appendChild(document.createTextNode(p[1]+"/"+dom+" (수)"));
+      inp.addEventListener("change", function(){ if(inp.checked) hid.value = iso; });
+      row.appendChild(lab);
+    });
+  }
+  function setDefaultMonth(){
+    var el = document.getElementById("dashRefMonth");
+    if(!el) return;
+    var parts = new Intl.DateTimeFormat("en-CA",{timeZone:TZ,year:"numeric",month:"2-digit"}).formatToParts(new Date());
+    var y="", mo="";
+    parts.forEach(function(pt){ if(pt.type==="year") y=pt.value; if(pt.type==="month") mo=pt.value; });
+    if(y&&mo) el.value = y+"-"+mo;
+  }
+  setDefaultMonth();
+  rebuildWednesdays();
+  var mEl = document.getElementById("dashRefMonth");
+  if(mEl) mEl.addEventListener("change", rebuildWednesdays);
+  function postBoardBody(mode){
+    var body = { channelId: ch(), mode: mode };
+    var rw = (document.getElementById("dashRefWedIso")||{}).value;
+    if(rw) body.referenceWednesdayIso = rw;
+    return body;
+  }
   if(${hc}){
-    document.getElementById("dashPostDef").onclick = function(){ post("/dashboard/api/control/post-board", { channelId: ch(), mode: "default" }); };
-    document.getElementById("dashPostSp").onclick = function(){ post("/dashboard/api/control/post-board", { channelId: ch(), mode: "special" }); };
+    document.getElementById("dashPostDef").onclick = function(){ post("/dashboard/api/control/post-board", postBoardBody("default")); };
+    document.getElementById("dashPostSp").onclick = function(){ post("/dashboard/api/control/post-board", postBoardBody("special")); };
     document.getElementById("dashClose").onclick = function(){ post("/dashboard/api/control/close-latest", { channelId: ch() }); };
     document.getElementById("dashSheet").onclick = function(){ post("/dashboard/api/control/sheet-sync", {}); };
   }
@@ -656,7 +751,7 @@ function renderDashboardLayout(activeTab, docTitle, ctx, mainInnerHtml) {
  *   getDashboardSnapshot?: () => Record<string, unknown>;
  *   dashboardCloseLatestInChannel?: (channelId: string) => Promise<Record<string, unknown>>;
  *   dashboardImportSheet?: () => Promise<Record<string, unknown>>;
- *   dashboardPostBoard?: (channelId: string, mode: string) => Promise<Record<string, unknown>>;
+ *   dashboardPostBoard?: (channelId: string, mode: string, referenceWednesdayIso?: string) => Promise<Record<string, unknown>>;
  *   saveDashboardScheduleConfig?: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
  * }} [options]
  */
@@ -963,10 +1058,14 @@ function startDashboardIfEnabled(discordClient, options = {}) {
         const uid = req.session.dashboardUser.id;
         const modeRaw = String(req.body?.mode || "default").toLowerCase();
         const mode = modeRaw === "special" ? "special" : "default";
-        const out = await dashboardPostBoard(String(req.body?.channelId || ""), mode);
+        const refIso =
+          typeof req.body?.referenceWednesdayIso === "string"
+            ? String(req.body.referenceWednesdayIso).trim()
+            : "";
+        const out = await dashboardPostBoard(String(req.body?.channelId || ""), mode, refIso);
         if (out.ok) {
           console.log(
-            `[dashboard] control post-board ok mode=${mode} channel=${req.body?.channelId} by=${uid}`
+            `[dashboard] control post-board ok mode=${mode} channel=${req.body?.channelId} ref=${refIso || "(none)"} by=${uid}`
           );
         }
         res.status(out.ok ? 200 : 400).json(out);
