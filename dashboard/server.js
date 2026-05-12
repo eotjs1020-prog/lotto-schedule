@@ -186,14 +186,38 @@ code {
   font-family: ui-monospace, monospace;
 }
 .dash-header {
+  background: #1e1f22;
+  border-bottom: 1px solid var(--border-faint);
+}
+.dash-header__top {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 14px 20px;
-  background: #1e1f22;
-  border-bottom: 1px solid var(--border-faint);
+}
+.dash-header-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0 12px 0 16px;
+  border-top: 1px solid var(--border-faint);
+  background: #18191c;
+}
+.dash-tab {
+  display: inline-block;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.dash-tab:hover { color: var(--text-heading); text-decoration: none; }
+.dash-tab--active {
+  color: var(--text-heading);
+  border-bottom-color: var(--blurple);
 }
 .dash-title { font-size: 17px; font-weight: 700; color: var(--text-heading); margin: 0; letter-spacing: -0.02em; }
 .dash-title__sub { display: block; font-size: 12px; font-weight: 600; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -518,7 +542,6 @@ const SCHED_DAY_LABEL = { MON: "월", TUE: "화", WED: "수", THU: "목", FRI: "
  * @param {boolean} hasSave
  */
 function renderScheduleConfigPanel(sf, hasSave) {
-  const pathEsc = escapeHtml(sf.path || "");
   const workLines = escapeHtml((sf.workDates || []).join("\n"));
   const holLines = escapeHtml((sf.holidayDates || []).join("\n"));
   const guideEsc = escapeHtml(sf.boardGuideText || "");
@@ -537,20 +560,14 @@ function renderScheduleConfigPanel(sf, hasSave) {
     : "";
   const hc = hasSave ? "true" : "false";
   return `<article class="embed embed--green">
-<p class="embed__kicker">스케줄</p>
-<h2 class="embed__title">일정 규칙 · 안내글</h2>
-<p class="embed__desc">설정은 <code>USER_WORK_SCHEDULE_PATH</code>가 있으면 그 파일, 없으면 프로젝트 루트 <code>user-work-schedule.json</code>에 저장됩니다. 요일 막기·휴일·추가 근무일은 저장 직후 버튼 색에 반영되고, 안내글은 <strong>새로 게시하는 조율판</strong> embed에만 적용됩니다.</p>
 ${warn}
-<p class="embed__desc" style="margin-bottom:0"><strong>파일</strong> <code>${pathEsc || "—"}</code></p>
-<label class="form-label" for="dashHol">공휴일·휴무일 <span class="muted">(YYYY-MM-DD, 한 줄에 하나)</span></label>
-<span class="muted">조율 주 7일 안에 들어오는 날은 근무일 목록에 있어도 요일 버튼을 막지 않습니다.</span>
+<label class="form-label" for="dashHol">공휴일·휴무일</label>
 <textarea id="dashHol" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-05&#10;2026-10-03">${holLines}</textarea>
-<label class="form-label" for="dashWork">추가 근무일 <span class="muted">(YYYY-MM-DD)</span></label>
-<span class="muted">조율 주에 포함되면 해당 요일 버튼이 빨강(선택 불가). <code>SCHEDULE_GLOBAL_WORK_DATES</code>와 합쳐집니다.</span>
+<label class="form-label" for="dashWork">추가 근무일</label>
 <textarea id="dashWork" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-08">${workLines}</textarea>
-<label class="form-label">매주 막을 요일 <span class="muted">(디스코드 빨강 버튼과 같음)</span></label>
+<label class="form-label">매주 막을 요일</label>
 <div class="sched-pill-row">${chk}</div>
-<label class="form-label" for="dashGuide">조율판 안내글 <span class="muted">(<code>**안내**</code> 아래 전체, 비우면 기본, 약 ${2000}자)</span></label>
+<label class="form-label" for="dashGuide">조율판 안내글</label>
 <textarea id="dashGuide" class="inp ta" rows="10" spellcheck="false" placeholder="(기본 안내 사용 중)">${guideEsc}</textarea>
 ${btn}
 <pre id="dashSchedOut" class="dashOut"></pre>
@@ -585,6 +602,52 @@ ${btn}
 })();
 </script>
 </article>`;
+}
+
+/**
+ * @param {"status" | "schedule"} activeTab
+ * @param {string} docTitle
+ * @param {{ displayName: string; guildName: string }} ctx
+ * @param {string} mainInnerHtml
+ */
+function renderDashboardLayout(activeTab, docTitle, ctx, mainInnerHtml) {
+  const c1 = activeTab === "status" ? " dash-tab--active" : "";
+  const c2 = activeTab === "schedule" ? " dash-tab--active" : "";
+  return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(docTitle)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>${dashboardSharedStyles()}</style>
+</head>
+<body>
+  <header class="dash-header">
+    <div class="dash-header__top">
+      <div>
+        <h1 class="dash-title">조율 봇</h1>
+        <span class="dash-title__sub">대시보드 · ${escapeHtml(ctx.guildName)}</span>
+      </div>
+      <nav class="dash-nav">
+        <span class="muted">${escapeHtml(ctx.displayName)}</span>
+        <a href="/dashboard/api/snapshot.json" target="_blank" rel="noopener">JSON</a>
+        <a href="/dashboard/logout">로그아웃</a>
+      </nav>
+    </div>
+    <nav class="dash-header-tabs" aria-label="대시보드 구역">
+      <a href="/dashboard" class="dash-tab${c1}">상태</a>
+      <a href="/dashboard/schedule" class="dash-tab${c2}">스케줄 작성</a>
+    </nav>
+  </header>
+  <main class="dash-main">
+    ${mainInnerHtml}
+  </main>
+  <p class="footer-note">접속: <code>GUILD_ID</code> 길드의 <strong>Administrator</strong> 이거나, <code>DASHBOARD_ACCESS_USER_IDS</code> / <code>DASHBOARD_ACCESS_ROLE_IDS</code>(.env)에 해당하는 경우입니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
+</body>
+</html>`;
 }
 
 /**
@@ -982,44 +1045,8 @@ function startDashboardIfEnabled(discordClient, options = {}) {
         ? snapshot.features.scheduleChannelId
         : "";
     const controlHtml = renderRemoteControlPanel(hasRemote, defaultCh);
-    const sf =
-      snapshot && snapshot.scheduleFile && typeof snapshot.scheduleFile === "object"
-        ? snapshot.scheduleFile
-        : {
-            path: "",
-            workDates: [],
-            holidayDates: [],
-            blockedDayKeys: [],
-            boardGuideText: "",
-            usesDefaultGuide: true,
-          };
-    const schedHtml = renderScheduleConfigPanel(sf, Boolean(saveDashboardScheduleConfig));
 
-    res.type("text/html; charset=utf-8").send(`<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>조율 봇 · 대시보드</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>${dashboardSharedStyles()}</style>
-</head>
-<body>
-  <header class="dash-header">
-    <div>
-      <h1 class="dash-title">조율 봇</h1>
-      <span class="dash-title__sub">대시보드 · ${escapeHtml(guildName)}</span>
-    </div>
-    <nav class="dash-nav">
-      <span class="muted">${escapeHtml(displayName)}</span>
-      <a href="/dashboard/api/snapshot.json" target="_blank" rel="noopener">JSON</a>
-      <a href="/dashboard/logout">로그아웃</a>
-    </nav>
-  </header>
-  <main class="dash-main">
-    <article class="embed embed--brand">
+    const mainInner = `<article class="embed embed--brand">
       <p class="embed__kicker">상태</p>
       <h2 class="embed__title">봇 · 길드</h2>
       <p class="embed__desc">연결·핑·기능 플래그를 한눈에 봅니다. (디스코드 임베드와 비슷한 레이아웃)</p>
@@ -1037,13 +1064,62 @@ function startDashboardIfEnabled(discordClient, options = {}) {
 
     ${boardsHtml}
 
-    ${schedHtml}
+    ${controlHtml}`;
 
-    ${controlHtml}
-  </main>
-  <p class="footer-note">접속: <code>GUILD_ID</code> 길드의 <strong>Administrator</strong> 이거나, <code>DASHBOARD_ACCESS_USER_IDS</code> / <code>DASHBOARD_ACCESS_ROLE_IDS</code>(.env)에 해당하는 경우입니다. 봇 재시작 시 메모리 조율판·관리자 잠금은 초기화됩니다.</p>
-</body>
-</html>`);
+    res
+      .type("text/html; charset=utf-8")
+      .send(
+        renderDashboardLayout(
+          "status",
+          "조율 봇 · 상태",
+          { displayName, guildName },
+          mainInner
+        )
+      );
+  });
+
+  app.get("/dashboard/schedule", (req, res) => {
+    const du = req.session.dashboardUser;
+    if (!du || !du.id) {
+      res.redirect("/dashboard/login");
+      return;
+    }
+
+    const ready = discordClient.isReady();
+    const guild = ready ? discordClient.guilds.cache.get(guildId) : null;
+    const guildName = guild ? guild.name : "(캐시 없음 — 봇이 길드에 없을 수 있음)";
+    const displayName = du.global_name || du.username || du.id;
+
+    let snapshot = null;
+    try {
+      snapshot = getDashboardSnapshot ? getDashboardSnapshot() : null;
+    } catch (e) {
+      snapshot = { error: String(e && e.message), boards: [], features: {} };
+    }
+
+    const sf =
+      snapshot && snapshot.scheduleFile && typeof snapshot.scheduleFile === "object"
+        ? snapshot.scheduleFile
+        : {
+            path: "",
+            workDates: [],
+            holidayDates: [],
+            blockedDayKeys: [],
+            boardGuideText: "",
+            usesDefaultGuide: true,
+          };
+    const schedHtml = renderScheduleConfigPanel(sf, Boolean(saveDashboardScheduleConfig));
+
+    res
+      .type("text/html; charset=utf-8")
+      .send(
+        renderDashboardLayout(
+          "schedule",
+          "조율 봇 · 스케줄 작성",
+          { displayName, guildName },
+          schedHtml
+        )
+      );
   });
 
   const bindHost = (process.env.DASHBOARD_BIND || "0.0.0.0").trim() || "0.0.0.0";
@@ -1051,7 +1127,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
   try {
     server = app.listen(listenPort, bindHost, () => {
       console.log(
-        `[dashboard] HTTP ${bindHost}:${listenPort} — /dashboard/login → OAuth · /dashboard · /dashboard/api/snapshot.json`
+        `[dashboard] HTTP ${bindHost}:${listenPort} — /dashboard/login → OAuth · /dashboard · /dashboard/schedule · /dashboard/api/snapshot.json`
       );
       console.log(
         "[dashboard] 클라우드에 떠 있으면: 다른 PC에서는 localhost 대신 이 인스턴스 공인 IP/도메인으로 접속하거나 SSH -L 터널을 쓰세요."
