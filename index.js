@@ -1167,7 +1167,7 @@ function normalizePersonLabelForMatch(s) {
     .replace(/\s+/g, " ");
 }
 
-/** 괄호 앞·# 앞 별칭 등으로 시트↔디스코드 표시명 비교 */
+/** 괄호 앞·# 앞·슬래시 구간·첫 단어 등으로 시트↔디스코드 표시명 비교 */
 function personLabelVariants(label) {
   const n = normalizePersonLabelForMatch(label);
   const set = new Set();
@@ -1183,7 +1183,33 @@ function personLabelVariants(label) {
   if (noHash) {
     set.add(noHash);
   }
+  if (n.includes("/")) {
+    for (const part of n.split("/")) {
+      const p = part.trim();
+      if (!p) {
+        continue;
+      }
+      set.add(p);
+      const pp = p.replace(/\s*[\(\[\{].*$/u, "").trim();
+      if (pp) {
+        set.add(pp);
+      }
+      const firstTok = p.split(/\s+/)[0];
+      if (firstTok && firstTok.length >= 2) {
+        set.add(firstTok);
+      }
+    }
+  }
   return set;
+}
+
+function extractSnowflakeIdFromText(s) {
+  const str = String(s ?? "");
+  const matches = str.match(/(?<![0-9])(\d{17,20})(?![0-9])/g);
+  if (!matches || matches.length === 0) {
+    return null;
+  }
+  return matches[matches.length - 1];
 }
 
 function labelsMatchLoosely(sheetLabel, sessionLabel) {
@@ -1212,6 +1238,21 @@ function resolveSheetParticipantToUserId(displayNameRaw, session) {
       return right;
     }
   }
+  const slashIdx = raw.indexOf("/");
+  if (slashIdx >= 0) {
+    const right = raw.slice(slashIdx + 1).trim();
+    if (/^\d{17,20}$/.test(right)) {
+      return right;
+    }
+    const idInRight = extractSnowflakeIdFromText(right);
+    if (idInRight) {
+      return idInRight;
+    }
+  }
+  const embedded = extractSnowflakeIdFromText(raw);
+  if (embedded) {
+    return embedded;
+  }
   const envMap = getScheduleSheetUserMapFromEnv();
   const fromMap = envMap[raw];
   if (fromMap != null && /^\d{17,20}$/.test(String(fromMap).trim())) {
@@ -1221,6 +1262,13 @@ function resolveSheetParticipantToUserId(displayNameRaw, session) {
   for (const [key, val] of Object.entries(envMap)) {
     if (key === raw) {
       continue;
+    }
+    if (
+      labelsMatchLoosely(raw, key) &&
+      val != null &&
+      /^\d{17,20}$/.test(String(val).trim())
+    ) {
+      return String(val).trim();
     }
     const keyVars = personLabelVariants(key);
     for (const rv of rawVars) {
@@ -1251,6 +1299,23 @@ function displayNameForSheetParticipant(displayNameRaw, userId, session) {
     const left = raw.slice(0, pipe).trim();
     if (left) {
       return left;
+    }
+  }
+  const slash = raw.indexOf("/");
+  if (slash >= 0) {
+    const left = raw.slice(0, slash).trim();
+    if (left) {
+      return left;
+    }
+  }
+  const sid = extractSnowflakeIdFromText(raw);
+  if (sid && userId === sid) {
+    const strip = raw
+      .replace(new RegExp(`(?<![0-9])${sid}(?![0-9])`), "")
+      .replace(/[/|]\s*$/g, "")
+      .trim();
+    if (strip) {
+      return strip;
     }
   }
   return session.users.get(userId)?.username || raw;
@@ -2179,10 +2244,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
               (showNames ? `매칭 실패한 A열 값: ${showNames}` : "");
           } else if (d && d.resolvedBlockCount > 0) {
             text =
-              `주간이 맞는 조율판 ${r.matched}개에는 **반영할 변경이 없었어요**. 시트의 O/X 가 조율판과 이미 같습니다.` +
-              (d.unresolvedNames?.length
-                ? `\n참고(무시된 행): ${showNames}`
-                : "");
+              `주간이 맞는 조율판 ${r.matched}개: **이미 조율판에 연결된 사람** 기준으로는 시트 O/X 와 같아서 수정할 게 없었어요.\n` +
+              `다만 아래 A열 행은 **유저를 특정하지 못해** 시트 값을 적용하지 않았습니다. (해당 분이 디스코드에서 버튼을 한 번도 누르지 않았거나, 이름이 멤버 표시명과 너무 다를 수 있어요.)\n` +
+              `• A열에 \`…|유저ID\` 또는 셀 안에 17~19자리 **숫자 ID** 를 넣거나\n` +
+              `• SCHEDULE_SHEET_USER_MAP 에 시트 문자열 → 유저 ID 를 추가하세요.\n` +
+              (d.unresolvedNames?.length ? `무시된 A열: ${showNames}` : "");
           } else if (d?.explicitEmpty) {
             text = `주간이 맞는 조율판 ${r.matched}개: 시트가 "참여자 없음" 이고, 세션에도 이미 선택이 비어 있어 바꿀 게 없었어요.`;
           } else {
