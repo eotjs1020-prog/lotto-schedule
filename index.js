@@ -54,6 +54,9 @@ const TIME_SLOTS = ["19:00", "19:30", "20:00", "20:30", "21:00"];
 
 const sessions = new Map();
 const liveSyncTimers = new Map();
+/** 시트 반복 가져오기 시 members.fetch 부담 완화 */
+let guildMemberLabelIndexCache = { map: null, atMs: 0 };
+const GUILD_MEMBER_LABEL_INDEX_TTL_MS = 60_000;
 
 const SCHEDULE_TZ = "Asia/Seoul";
 /** @type {{ sessionId: string; channelId: string; messageId: string } | null} */
@@ -1203,6 +1206,18 @@ function personLabelVariants(label) {
   return set;
 }
 
+/** 길드 멤버 인덱스 매칭: 더 구체적인(긴) 라벨을 먼저 시도 */
+function personLabelVariantListOrdered(label) {
+  const arr = [...personLabelVariants(label)];
+  arr.sort((a, b) => {
+    if (b.length !== a.length) {
+      return b.length - a.length;
+    }
+    return a.localeCompare(b);
+  });
+  return arr;
+}
+
 function extractSnowflakeIdFromText(s) {
   const str = String(s ?? "");
   const matches = str.match(/(?<![0-9])(\d{17,20})(?![0-9])/g);
@@ -1223,7 +1238,115 @@ function labelsMatchLoosely(sheetLabel, sessionLabel) {
   return false;
 }
 
-function resolveSheetParticipantToUserId(displayNameRaw, session) {
+function isGuildMemberSheetResolveEnabled() {
+  const raw = process.env.SCHEDULE_SHEET_RESOLVE_GUILD_MEMBERS;
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return true;
+  }
+  const s = String(raw).trim().toLowerCase();
+  if (s === "0" || s === "false" || s === "off" || s === "no") {
+    return false;
+  }
+  return s === "1" || s === "true" || s === "on" || s === "yes";
+}
+
+/**
+ * @param {import("discord.js").Guild} guild
+ * @returns {Map<string, Set<string>>}
+ */
+function buildGuildMemberLabelToUserIdsMap(guild) {
+  /** @type {Map<string, Set<string>>} */
+  const labelToIds = new Map();
+  function addLabelVariants(displayStr, userId) {
+    const base = String(displayStr ?? "").trim();
+    if (!base || base.length < 2) {
+      return;
+    }
+    for (const v of personLabelVariants(base)) {
+      if (v.length < 2) {
+        continue;
+      }
+      if (!labelToIds.has(v)) {
+        labelToIds.set(v, new Set());
+      }
+      labelToIds.get(v).add(userId);
+    }
+  }
+
+  for (const m of guild.members.cache.values()) {
+    if (m.user.bot) {
+      continue;
+    }
+    const uid = m.id;
+    addLabelVariants(m.displayName, uid);
+    if (m.nickname) {
+      addLabelVariants(m.nickname, uid);
+    }
+    addLabelVariants(m.user.username, uid);
+    if (m.user.globalName) {
+      addLabelVariants(m.user.globalName, uid);
+    }
+  }
+  return labelToIds;
+}
+
+/** @returns {Promise<Map<string, Set<string>> | null>} */
+async function fetchGuildMemberLabelIndex(client) {
+  const guildId = process.env.GUILD_ID ? String(process.env.GUILD_ID).trim() : "";
+  if (!guildId) {
+    return null;
+  }
+  const guild =
+    client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
+  if (!guild) {
+    return null;
+  }
+  try {
+    await guild.members.fetch();
+  } catch (e) {
+    console.warn(
+      "[시트→멤버] members.fetch 실패 — Discord 개발자 포털에서 **Privileged Gateway: Server Members Intent** 를 켜 주세요:",
+      e?.message || e
+    );
+    return null;
+  }
+  const map = buildGuildMemberLabelToUserIdsMap(guild);
+  console.log(`[시트→멤버] 길드 "${guild.name}" 멤버 ${guild.members.cache.size}명 기준 표시명 인덱스 생성`);
+  return map;
+}
+
+async function getGuildMemberLabelIndexForSheetImport(client) {
+  if (!isGuildMemberSheetResolveEnabled()) {
+    return null;
+  }
+  const now = Date.now();
+  if (
+    guildMemberLabelIndexCache.map &&
+    now - guildMemberLabelIndexCache.atMs < GUILD_MEMBER_LABEL_INDEX_TTL_MS
+  ) {
+    return guildMemberLabelIndexCache.map;
+  }
+  const map = await fetchGuildMemberLabelIndex(client);
+  if (map) {
+    guildMemberLabelIndexCache = { map, atMs: now };
+  }
+  return map;
+}
+
+function tryResolveSheetNameViaGuildMemberIndex(raw, memberLabelIndex) {
+  if (!memberLabelIndex) {
+    return null;
+  }
+  for (const v of personLabelVariantListOrdered(raw)) {
+    const ids = memberLabelIndex.get(v);
+    if (ids && ids.size === 1) {
+      return [...ids][0];
+    }
+  }
+  return null;
+}
+
+function resolveSheetParticipantToUserId(displayNameRaw, session, memberLabelIndex) {
   const raw = String(displayNameRaw ?? "").trim();
   if (!raw || raw === "참여자 없음") {
     return null;
@@ -1289,6 +1412,10 @@ function resolveSheetParticipantToUserId(displayNameRaw, session) {
       return uid;
     }
   }
+  const guildHit = tryResolveSheetNameViaGuildMemberIndex(raw, memberLabelIndex);
+  if (guildHit) {
+    return guildHit;
+  }
   return null;
 }
 
@@ -1342,7 +1469,7 @@ function dayTimeMapsEqual(a, b) {
 /** 시트 내용을 세션에 반영.
  * @returns {{ changed: boolean; blockCount: number; resolvedBlockCount: number; unresolvedNames: string[]; explicitEmpty: boolean }}
  */
-function applyParsedLiveSheetToSession(session, parsed) {
+function applyParsedLiveSheetToSession(session, parsed, memberLabelIndex) {
   if (parsed.explicitEmpty && parsed.blocks.length === 0) {
     let changed = false;
     for (const [, ud] of session.users) {
@@ -1367,7 +1494,7 @@ function applyParsedLiveSheetToSession(session, parsed) {
   const blockCount = parsed.blocks.length;
 
   for (const block of parsed.blocks) {
-    const uid = resolveSheetParticipantToUserId(block.displayName, session);
+    const uid = resolveSheetParticipantToUserId(block.displayName, session, memberLabelIndex);
     if (!uid) {
       unresolved.add(block.displayName);
       continue;
@@ -1394,7 +1521,7 @@ function applyParsedLiveSheetToSession(session, parsed) {
 
   if (unresolved.size > 0) {
     console.warn(
-      "[실시간시트→디스코드] 참가자 ID를 알 수 없어 건너뜀(닉네임·SCHEDULE_SHEET_USER_MAP·표시|유저ID 형식):",
+      "[실시간시트→디스코드] 참가자 ID를 알 수 없어 건너뜀(세션 닉·SCHEDULE_SHEET_USER_MAP·|ID·길드멤버표시명). A열:",
       [...unresolved].join(", ")
     );
   }
@@ -1454,6 +1581,8 @@ async function importLiveSheetToDiscordSessions(client) {
     return out;
   }
 
+  const memberLabelIndex = await getGuildMemberLabelIndexForSheetImport(client);
+
   const sessionsWithBoard = [...sessions.values()].filter((s) => s.messageId && s.channelId);
   if (sessionsWithBoard.length > 0 && parsed.startLabel && parsed.endLabel) {
     let anyLabelMatch = false;
@@ -1493,7 +1622,7 @@ async function importLiveSheetToDiscordSessions(client) {
       continue;
     }
     out.matched += 1;
-    const applyResult = applyParsedLiveSheetToSession(session, parsed);
+    const applyResult = applyParsedLiveSheetToSession(session, parsed, memberLabelIndex);
     if (!applyResult.changed) {
       out.noEditDetail = applyResult;
       continue;
@@ -1948,7 +2077,7 @@ function startWeeklyCron(client) {
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
@@ -2239,15 +2368,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (d && d.blockCount > 0 && d.resolvedBlockCount === 0) {
             text =
               `주간이 맞는 조율판은 ${r.matched}개인데, 시트 **참가자 이름(A열)** 을 디스코드 유저와 연결하지 못했어요.\n` +
-              `• A열을 \`표시명|유저스노우플레이크ID\` 형식으로 적거나\n` +
-              `• .env 의 SCHEDULE_SHEET_USER_MAP 에 JSON 으로 \`"시트에 적은 이름": "유저ID"\` 를 넣어 주세요.\n` +
-              (showNames ? `매칭 실패한 A열 값: ${showNames}` : "");
+              `• **기본**: GUILD_ID 서버에서 멤버 **표시명·닉네임·유저명** 과 맞춰 자동 연결합니다. (Discord 개발자 포털 → 봇 → **Server Members Intent** 필요. 끄려면 \`SCHEDULE_SHEET_RESOLVE_GUILD_MEMBERS=0\`)\n` +
+              `• 같은 별칭이 2명 이상이면 자동 연결하지 않습니다.\n` +
+              `• A열 \`이름|유저ID\` 또는 셀 안 **17~19자리 ID**, 또는 SCHEDULE_SHEET_USER_MAP JSON.\n` +
+              (showNames ? `매칭 실패한 A열: ${showNames}` : "");
           } else if (d && d.resolvedBlockCount > 0) {
             text =
-              `주간이 맞는 조율판 ${r.matched}개: **이미 조율판에 연결된 사람** 기준으로는 시트 O/X 와 같아서 수정할 게 없었어요.\n` +
-              `다만 아래 A열 행은 **유저를 특정하지 못해** 시트 값을 적용하지 않았습니다. (해당 분이 디스코드에서 버튼을 한 번도 누르지 않았거나, 이름이 멤버 표시명과 너무 다를 수 있어요.)\n` +
-              `• A열에 \`…|유저ID\` 또는 셀 안에 17~19자리 **숫자 ID** 를 넣거나\n` +
-              `• SCHEDULE_SHEET_USER_MAP 에 시트 문자열 → 유저 ID 를 추가하세요.\n` +
+              `주간이 맞는 조율판 ${r.matched}개: **이미 매칭된 참가자** 기준으로는 시트 O/X 와 같아서 수정할 게 없었어요.\n` +
+              `아래 A열은 **유저를 한 명으로 특정하지 못해** 시트 값을 적용하지 않았습니다. (길드 자동 매칭 실패·동명이·표시명 형식 차이 등)\n` +
+              `• Server Members Intent·GUILD_ID·\`SCHEDULE_SHEET_RESOLVE_GUILD_MEMBERS\` 를 확인하거나, A열 \`|유저ID\` / USER_MAP 을 쓰세요.\n` +
               (d.unresolvedNames?.length ? `무시된 A열: ${showNames}` : "");
           } else if (d?.explicitEmpty) {
             text = `주간이 맞는 조율판 ${r.matched}개: 시트가 "참여자 없음" 이고, 세션에도 이미 선택이 비어 있어 바꿀 게 없었어요.`;
