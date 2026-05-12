@@ -267,17 +267,6 @@ function weekdayKeyFromIsoYmd(isoYmd, timeZone = SCHEDULE_TZ) {
   return WEEKDAY_SHORT_TO_KEY[short] || null;
 }
 
-/** 해당 날짜가 속한 주의 월요일 (한국 달력 기준) */
-function getMondayIsoContaining(isoYmd) {
-  for (let back = 0; back < 7; back++) {
-    const cand = addCalendarDaysToIsoYmd(isoYmd, -back);
-    if (weekdayKeyFromIsoYmd(cand, SCHEDULE_TZ) === "MON") {
-      return cand;
-    }
-  }
-  return isoYmd;
-}
-
 /** 해당 날짜가 속한 **수~화** 주간의 시작 수요일 (한국 달력 기준) */
 function getWednesdayIsoContaining(isoYmd) {
   for (let back = 0; back < 7; back++) {
@@ -287,18 +276,6 @@ function getWednesdayIsoContaining(isoYmd) {
     }
   }
   return isoYmd;
-}
-
-/**
- * 조율판이 가리키는 '투표 대상 주'의 월요일.
- * 기본 1 = 게시글이 올라온 주의 다음 주(월~일). SCHEDULE_VOTE_WEEK_OFFSET_WEEKS=0 이면 같은 주.
- */
-function getVoteTargetWeekMondayIso(session) {
-  const createdIso = formatCalendarDateInTz(session.createdAt, SCHEDULE_TZ);
-  const postWeekMonday = getMondayIsoContaining(createdIso);
-  const offsetWeeks = Number.parseInt(process.env.SCHEDULE_VOTE_WEEK_OFFSET_WEEKS ?? "1", 10);
-  const ow = Number.isFinite(offsetWeeks) ? offsetWeeks : 1;
-  return addCalendarDaysToIsoYmd(postWeekMonday, ow * 7);
 }
 
 /** .env 주기 + JSON global 의 cycle/workDates 를 합친 설정 (투표 주 단위 요일 계산용) */
@@ -359,19 +336,20 @@ function getMergedRepeatCycleConfigForComputation() {
   return cfg;
 }
 
-/** 투표 대상 주에서 달력상 근무인 날의 요일 버튼만 막기 */
+/** 조율판과 동일한 수~화 7일 구간에서 달력상 근무인 날의 요일 버튼만 막기 */
 function computeCycleBlockedWeekdayKeysForSession(session) {
   const cfg = getMergedRepeatCycleConfigForComputation();
   if (!cfg) {
     return new Set();
   }
 
-  const voteMonday = getVoteTargetWeekMondayIso(session);
+  const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
+  const { voteStartIso } = getVoteWindowIsoForSession(sourceSession);
   const blocked = new Set();
   const tz = cfg.timezone || SCHEDULE_TZ;
 
   for (let i = 0; i < 7; i++) {
-    const iso = addCalendarDaysToIsoYmd(voteMonday, i);
+    const iso = addCalendarDaysToIsoYmd(voteStartIso, i);
     if (isCalendarDateWorkDay(iso, cfg)) {
       const key = weekdayKeyFromIsoYmd(iso, tz);
       if (key) {
@@ -1739,16 +1717,15 @@ client.once(Events.ClientReady, async (readyClient) => {
   const mergedCfg = getMergedRepeatCycleConfigForComputation();
   if (mergedCfg?.cycle || (mergedCfg?.workDates && mergedCfg.workDates.length > 0)) {
     const c = mergedCfg.cycle;
-    const ow = Number.parseInt(process.env.SCHEDULE_VOTE_WEEK_OFFSET_WEEKS ?? "1", 10);
     if (c) {
       console.log(
-        `근무 패턴 → 투표 대상 주(월 시작 + ${Number.isFinite(ow) ? ow : 1}주): 그 주 달력상 근무인 날의 요일 버튼만 빨갛게 막음 (오늘 달력과 무관하게 투표 가능)`
+        "근무 패턴 → 조율판에 표시된 수~화 7일 구간: 그 안에서 달력상 근무인 날의 요일 버튼만 빨갛게 막음 (/일정생성·일정생성특수 주간과 동일)"
       );
       console.log(
         `  주기: 휴무 ${c.restDays}일 → 근무 ${c.workDays}일, 기준일 ${c.anchorDate} (${c.anchorStartsWork ? "기준일=근무 시작" : "기준일=휴무 시작"})`
       );
     } else if (mergedCfg.workDates?.length) {
-      console.log(`근무일 목록(workDates): 투표 대상 주에 걸리는 날의 요일 버튼만 막음`);
+      console.log(`근무일 목록(workDates): 조율판 수~화 7일 안에 걸리는 날의 요일 버튼만 막음`);
     }
   }
   const envBlockedDays = parseEnvBlockedDayKeysSet();

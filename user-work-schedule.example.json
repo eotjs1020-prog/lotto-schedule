@@ -1,5 +1,5 @@
 {
-  "__doc__": "3휴무3근무는 보통 .env의 SCHEDULE_GLOBAL_CYCLE_* 로 두면 됨. 조율판은 '투표 대상 주'(게시 주의 다음 주 월~일, SCHEDULE_VOTE_WEEK_OFFSET_WEEKS) 안에서 달력상 근무인 날의 요일 버튼만 빨갛게 막음. 오늘이 근무든 휴무든 시간 버튼·다른 요일은 계속 선택 가능. 추가로 고정 요일만 막으려면 global.blockedDayKeys 또는 SCHEDULE_BLOCKED_DAY_KEYS.",
+  "__doc__": "3휴무3근무는 보통 .env의 SCHEDULE_GLOBAL_CYCLE_* 로 두면 됨. 조율판에 표시된 수~화 7일과 같은 달력 구간에서 근무일 요일 버튼만 빨갛게 막음(/일정생성·일정생성특수 주간과 동일). 오늘이 근무든 휴무든 시간 버튼·다른 요일은 계속 선택 가능. 추가로 고정 요일만 막으려면 global.blockedDayKeys 또는 SCHEDULE_BLOCKED_DAY_KEYS.",
   "global": {
     "blockedDayKeys": []
   },
