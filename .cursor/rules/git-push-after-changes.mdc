@@ -1,0 +1,15 @@
+---
+description: After changing tracked project code, commit and push to origin so the server can git pull.
+alwaysApply: true
+---
+
+# Git — 푸시까지 마무리
+
+이 저장소에서 **추적되는 코드**(`index.js`, `dashboard/` 등)를 수정한 뒤 작업을 마칠 때:
+
+1. `git status`로 변경 파일 확인
+2. **절대 커밋하지 말 것:** `.env`, 비밀·토큰, 사용자 로컬 전용 파일(예: `user-work-schedule.json`이 `.gitignore`에 있으면 제외)
+3. 의미 있는 단위로 `git add` → `git commit -m "..."` (한 줄 요약, 영어 또는 한국어)
+4. `git push origin main` (현재 브랜치가 `main`이 아니면 해당 브랜치)
+
+사용자가 **푸시하지 말라**고 하면 커밋만 하거나 로컬에만 둔다. 푸시가 실패하면(인증 등) 원인을 짧게 알리고, 사용자가 로컬에서 푸시할 명령을 안내한다.
