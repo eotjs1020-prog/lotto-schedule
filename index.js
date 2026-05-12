@@ -78,30 +78,10 @@ function formatCalendarDateInTz(ms, timeZone) {
   }).format(ms);
 }
 
-function diffCalendarDays(fromIsoYmd, toIsoYmd) {
-  const [yf, mf, df] = fromIsoYmd.split("-").map(Number);
-  const [yt, mt, dt] = toIsoYmd.split("-").map(Number);
-  const fromUtc = Date.UTC(yf, mf - 1, df);
-  const toUtc = Date.UTC(yt, mt - 1, dt);
-  return Math.round((toUtc - fromUtc) / 86400000);
-}
-
 function addCalendarDaysToIsoYmd(isoYmd, deltaDays) {
   const [y, m, d] = isoYmd.split("-").map(Number);
   const ms = Date.UTC(y, m - 1, d) + deltaDays * 86400000;
   return formatCalendarDateInTz(ms, SCHEDULE_TZ);
-}
-
-/** 기준일이 근무 구간의 첫날인지. true / 1 / "1" / "true" 만 근무 먼저. 그 외는 휴무 먼저(기본). */
-function cycleAnchorStartsWorkFromFlag(value) {
-  if (value === true || value === 1) {
-    return true;
-  }
-  if (typeof value === "string") {
-    const s = value.trim().toLowerCase();
-    return s === "1" || s === "true";
-  }
-  return false;
 }
 
 function loadUserWorkScheduleMap() {
@@ -150,40 +130,15 @@ function loadUserWorkScheduleMap() {
   }
 }
 
+/** 달력 날짜가 `workDates` 목록에 있으면 조율 주에서 해당 요일 버튼을 막기 위한 "근무일"로 취급 */
 function isCalendarDateWorkDay(isoYmd, cfg) {
   if (!cfg || typeof cfg !== "object") {
     return false;
   }
-
-  if (Array.isArray(cfg.workDates)) {
-    const hit = cfg.workDates.some((d) => typeof d === "string" && d === isoYmd);
-    if (hit) {
-      return true;
-    }
-  }
-
-  const cycle = cfg.cycle;
-  if (!cycle || typeof cycle !== "object") {
+  if (!Array.isArray(cfg.workDates)) {
     return false;
   }
-
-  const anchorDate = typeof cycle.anchorDate === "string" ? cycle.anchorDate : "";
-  const workDays = Number.isFinite(cycle.workDays) ? cycle.workDays : NaN;
-  const restDays = Number.isFinite(cycle.restDays) ? cycle.restDays : NaN;
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(anchorDate) || workDays <= 0 || restDays <= 0) {
-    return false;
-  }
-
-  const anchorStartsWork = cycleAnchorStartsWorkFromFlag(cycle.anchorStartsWork);
-  const cycleLen = workDays + restDays;
-  const diffDays = diffCalendarDays(anchorDate, isoYmd);
-  const pos = ((diffDays % cycleLen) + cycleLen) % cycleLen;
-
-  if (anchorStartsWork) {
-    return pos < workDays;
-  }
-  return pos >= restDays;
+  return cfg.workDates.some((d) => typeof d === "string" && d === isoYmd);
 }
 
 /** .env SCHEDULE_GLOBAL_WORK_DATES=2026-05-08,2026-05-09 (Asia/Seoul 달력 기준) */
@@ -200,78 +155,6 @@ function getEnvGlobalWorkDateSet() {
     return null;
   }
   return new Set(dates);
-}
-
-const CYCLE_ANCHOR_FILE = path.join(__dirname, ".schedule-global-cycle-anchor");
-
-function readOrInitPersistedCycleAnchorDate() {
-  try {
-    const text = fs.readFileSync(CYCLE_ANCHOR_FILE, "utf8").trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-      return text;
-    }
-    console.warn(`근무 패턴 기준일 파일 형식이 잘못되어 다시 만듭니다: ${CYCLE_ANCHOR_FILE}`);
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      console.error("근무 패턴 기준일 파일 읽기 실패:", error.message || error);
-    }
-  }
-  const todayStr = formatCalendarDateInTz(Date.now(), SCHEDULE_TZ);
-  const tomorrowStr = addCalendarDaysToIsoYmd(todayStr, 1);
-  try {
-    fs.writeFileSync(CYCLE_ANCHOR_FILE, `${tomorrowStr}\n`, "utf8");
-    console.log(
-      `전역 근무 패턴: 기준일을 한국 시간 내일(${tomorrowStr})로 자동 저장했습니다. (${CYCLE_ANCHOR_FILE})`
-    );
-  } catch (error) {
-    console.error(
-      "근무 패턴 기준일 파일 저장 실패 — 이번 실행만 내일을 기준으로 계산합니다:",
-      error.message || error
-    );
-  }
-  return tomorrowStr;
-}
-
-/**
- * 전역 반복 패턴.
- * SCHEDULE_GLOBAL_CYCLE_WORK_DAYS / REST_DAYS 만 넣으면 기준일은 생략 가능 → 최초에 한국 시간 내일을 파일에 저장해 유지.
- * SCHEDULE_GLOBAL_CYCLE_ANCHOR_DATE 로 수동 지정 시 그 값이 우선.
- */
-function getEnvGlobalCycleScheduleConfig() {
-  const wd = process.env.SCHEDULE_GLOBAL_CYCLE_WORK_DAYS;
-  const rd = process.env.SCHEDULE_GLOBAL_CYCLE_REST_DAYS;
-  const workDays = Number.parseInt(String(wd), 10);
-  const restDays = Number.parseInt(String(rd), 10);
-  if (!Number.isFinite(workDays) || !Number.isFinite(restDays) || workDays <= 0 || restDays <= 0) {
-    return null;
-  }
-
-  const rawAnchor = process.env.SCHEDULE_GLOBAL_CYCLE_ANCHOR_DATE;
-  let anchorDate = null;
-  if (rawAnchor && /^\d{4}-\d{2}-\d{2}$/.test(String(rawAnchor).trim())) {
-    anchorDate = String(rawAnchor).trim();
-  } else {
-    anchorDate = readOrInitPersistedCycleAnchorDate();
-  }
-
-  if (!anchorDate) {
-    return null;
-  }
-
-  const raw = process.env.SCHEDULE_GLOBAL_CYCLE_ANCHOR_STARTS_WORK;
-  let anchorStartsWork = false;
-  if (raw !== undefined && String(raw).trim() !== "") {
-    anchorStartsWork = cycleAnchorStartsWorkFromFlag(String(raw).trim());
-  }
-  return {
-    timezone: SCHEDULE_TZ,
-    cycle: {
-      anchorDate,
-      workDays,
-      restDays,
-      anchorStartsWork,
-    },
-  };
 }
 
 const WEEKDAY_SHORT_TO_KEY = {
@@ -303,8 +186,8 @@ function getWednesdayIsoContaining(isoYmd) {
   return isoYmd;
 }
 
-/** .env 주기 + JSON global 의 cycle/workDates 를 합친 설정 (투표 주 단위 요일 계산용) */
-function getMergedRepeatCycleConfigForComputation() {
+/** .env `SCHEDULE_GLOBAL_WORK_DATES` + JSON `global.workDates` 합친 달력 근무일 목록 (조율 주 7일 안에서만 요일 막기에 사용) */
+function getMergedWorkDatesConfigForComputation() {
   loadUserWorkScheduleMap();
   const g = userWorkScheduleCache.global;
 
@@ -321,47 +204,17 @@ function getMergedRepeatCycleConfigForComputation() {
   workDatesArr.push(...jsonWd);
   workDatesArr = [...new Set(workDatesArr)];
 
-  const envCycleCfg = getEnvGlobalCycleScheduleConfig();
-
-  let cycleObj = null;
-  let tz = SCHEDULE_TZ;
-
-  if (envCycleCfg?.cycle) {
-    cycleObj = { ...envCycleCfg.cycle };
-    tz = envCycleCfg.timezone || SCHEDULE_TZ;
-  } else if (g && typeof g === "object" && g.cycle && typeof g.cycle === "object") {
-    const c = g.cycle;
-    const anchorDate = typeof c.anchorDate === "string" ? c.anchorDate.trim() : "";
-    const workDays = Number.parseInt(String(c.workDays), 10);
-    const restDays = Number.parseInt(String(c.restDays), 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(anchorDate) && workDays > 0 && restDays > 0) {
-      cycleObj = {
-        anchorDate,
-        workDays,
-        restDays,
-        anchorStartsWork: cycleAnchorStartsWorkFromFlag(c.anchorStartsWork),
-      };
-      if (typeof g.timezone === "string" && g.timezone.trim()) {
-        tz = g.timezone.trim();
-      }
-    }
-  }
-
-  if (!cycleObj && workDatesArr.length === 0) {
+  if (workDatesArr.length === 0) {
     return null;
   }
 
-  const cfg = { timezone: tz };
-  if (workDatesArr.length > 0) {
-    cfg.workDates = workDatesArr;
-  }
-  if (cycleObj) {
-    cfg.cycle = cycleObj;
-  }
-  return cfg;
+  return {
+    timezone: SCHEDULE_TZ,
+    workDates: workDatesArr,
+  };
 }
 
-/** `global.holidayDates`: 조율 주에 들어오는 달력 날짜는 주기상 근무여도 요일 버튼을 막지 않음(공휴일·사내 휴무 등). */
+/** `global.holidayDates`: 조율 주에 들어오는 달력 날짜는 근무일 목록에 있어도 요일 버튼을 막지 않음(공휴일·사내 휴무 등). */
 function getHolidayDateSetFromGlobal() {
   const g = userWorkScheduleCache.global;
   if (!g || typeof g !== "object" || !Array.isArray(g.holidayDates)) {
@@ -374,9 +227,9 @@ function getHolidayDateSetFromGlobal() {
   );
 }
 
-/** 조율판과 동일한 수~화 7일 구간에서 달력상 근무인 날의 요일 버튼만 막기 (전역 주기만 사용; 한 주 안에 근무·휴무가 1~3일씩 끊겨 보이는 것은 6일 주기를 7일 창으로 자른 자연스러운 결과) */
-function computeCycleBlockedWeekdayKeysForSession(session) {
-  const cfg = getMergedRepeatCycleConfigForComputation();
+/** 조율판과 동일한 수~화 7일 구간에서, `workDates`에 해당하는 달력 날의 요일 버튼만 막기 */
+function computeWorkDateBlockedWeekdayKeysForSession(session) {
+  const cfg = getMergedWorkDatesConfigForComputation();
   if (!cfg) {
     return new Set();
   }
@@ -404,7 +257,7 @@ function computeCycleBlockedWeekdayKeysForSession(session) {
   return blocked;
 }
 
-/** 요일 버튼 막기: MON,TUE,... (.env SCHEDULE_BLOCKED_DAY_KEYS + JSON global.blockedDayKeys만, 주기 계산 제외) */
+/** 요일 버튼 막기: MON,TUE,... (.env SCHEDULE_BLOCKED_DAY_KEYS + JSON global.blockedDayKeys만, 달력 근무일 목록 계산 제외) */
 function parseEnvBlockedDayKeysSet() {
   const raw = process.env.SCHEDULE_BLOCKED_DAY_KEYS;
   if (!raw || !String(raw).trim()) {
@@ -437,7 +290,7 @@ function getStaticBlockedDayKeysFromEnvAndJson() {
   return merged;
 }
 
-/** 세션에만 붙는 관리자 지정 빨간(잠금) 요일 — 전역 주기·.env·JSON과 합산 */
+/** 세션에만 붙는 관리자 지정 빨간(잠금) 요일 — 전역 근무일·.env·JSON과 합산 */
 function getSessionManualLockedDayKeysSet(session) {
   if (!session.manualLockedDayKeys) {
     session.manualLockedDayKeys = new Set();
@@ -477,7 +330,7 @@ function parseAdminScheduleDayKeysInput(raw) {
 
 function getMergedBlockedDayKeysForSession(session) {
   const merged = new Set(getStaticBlockedDayKeysFromEnvAndJson());
-  for (const k of computeCycleBlockedWeekdayKeysForSession(session)) {
+  for (const k of computeWorkDateBlockedWeekdayKeysForSession(session)) {
     merged.add(k);
   }
   for (const k of getSessionManualLockedDayKeysSet(session)) {
@@ -583,7 +436,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName("조율요일잠금")
     .setDescription(
-      "현재 채널 최신 조율판에 빨간(선택 불가) 요일을 관리자가 직접 지정합니다. 전역 주기·시트 잠금과 합쳐집니다."
+      "현재 채널 최신 조율판에 빨간(선택 불가) 요일을 관리자가 직접 지정합니다. 전역 근무일 목록·시트 잠금과 합쳐집니다."
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption((option) =>
@@ -1883,19 +1736,11 @@ client.once(Events.ClientReady, async (readyClient) => {
   if (globalDates) {
     console.log(`전역 근무일(.env): 달력상 ${globalDates.size}일 지정됨`);
   }
-  const mergedCfg = getMergedRepeatCycleConfigForComputation();
-  if (mergedCfg?.cycle || (mergedCfg?.workDates && mergedCfg.workDates.length > 0)) {
-    const c = mergedCfg.cycle;
-    if (c) {
-      console.log(
-        "근무 패턴 → 조율판에 표시된 수~화 7일 구간: 그 안에서 달력상 근무인 날의 요일 버튼만 빨갛게 막음 (/일정생성·일정생성특수 주간과 동일)"
-      );
-      console.log(
-        `  주기: 휴무 ${c.restDays}일 → 근무 ${c.workDays}일, 기준일 ${c.anchorDate} (${c.anchorStartsWork ? "기준일=근무 시작" : "기준일=휴무 시작"})`
-      );
-    } else if (mergedCfg.workDates?.length) {
-      console.log(`근무일 목록(workDates): 조율판 수~화 7일 안에 걸리는 날의 요일 버튼만 막음`);
-    }
+  const mergedCfg = getMergedWorkDatesConfigForComputation();
+  if (mergedCfg?.workDates?.length) {
+    console.log(
+      `근무일 목록(workDates + SCHEDULE_GLOBAL_WORK_DATES): ${mergedCfg.workDates.length}개 — 조율판 수~화 7일 안에 포함된 날의 요일 버튼만 빨강으로 막음`
+    );
   }
   const envBlockedDays = parseEnvBlockedDayKeysSet();
   if (envBlockedDays.size > 0) {
@@ -2434,6 +2279,7 @@ function saveDashboardScheduleFile(body) {
     } else {
       delete nextGlobal.boardGuideText;
     }
+    delete nextGlobal.cycle;
     const out = { ...base, users: base.users, global: nextGlobal };
     if (typeof base.__doc__ === "string") {
       out.__doc__ = base.__doc__;

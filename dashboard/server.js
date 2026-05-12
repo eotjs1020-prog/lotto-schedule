@@ -267,9 +267,9 @@ function renderScheduleConfigPanel(sf, hasSave) {
 <p class="muted">저장한 <strong>요일 막기·휴일·추가 근무일</strong>은 곧바로 버튼 색에 반영됩니다. <strong>안내글</strong>은 <strong>새로 게시하는 조율판</strong> embed에만 적용됩니다.</p>
 ${warn}
 <p><strong>파일</strong><br><code>${pathEsc || "—"}</code></p>
-<p><label for="dashHol">공휴일·휴무일 (YYYY-MM-DD)</label><br><span class="muted">조율 주 7일 안에 들어오는 이 날짜는, 주기상 근무일이어도 요일 버튼을 <strong>막지 않습니다</strong>.</span><br><textarea id="dashHol" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-05&#10;2026-10-03">${holLines}</textarea></p>
+<p><label for="dashHol">공휴일·휴무일 (YYYY-MM-DD)</label><br><span class="muted">조율 주 7일 안에 들어오는 이 날짜는, 근무일 목록에 있어도 요일 버튼을 <strong>막지 않습니다</strong>.</span><br><textarea id="dashHol" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-05&#10;2026-10-03">${holLines}</textarea></p>
 <p><label for="dashWork">추가 근무일 (YYYY-MM-DD)</label><br><span class="muted">조율 주에 포함되면 해당 날의 요일 버튼이 <strong>빨강(선택 불가)</strong>으로 잡힙니다. (.env의 SCHEDULE_GLOBAL_WORK_DATES와 합쳐집니다.)</span><br><textarea id="dashWork" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-08">${workLines}</textarea></p>
-<p><strong>매주 막을 요일</strong> <span class="muted">(전역 — 주기와 무관하게 항상 빨강)</span></p>
+<p><strong>매주 막을 요일</strong> <span class="muted">(전역 — 달력 근무일 막기와 무관하게 항상 빨강)</span></p>
 <p class="schedChkRow">${chk}</p>
 <p><label for="dashGuide">조율판 안내글 (<code>**안내**</code> 아래 전체)</label><br><span class="muted">비우고 저장하면 기본 문구로 돌아갑니다. Discord embed 한도로 약 ${2000}자까지.</span><br><textarea id="dashGuide" class="inp ta" rows="10" spellcheck="false" placeholder="(기본 안내 사용 중)">${guideEsc}</textarea></p>
 ${btn}

@@ -1,5 +1,5 @@
 {
-  "__doc__": "3휴무3근무는 보통 .env의 SCHEDULE_GLOBAL_CYCLE_* 로 두면 됨. 조율판 수~화 7일 구간에서 달력상 근무일인 날의 요일 버튼만 빨갛게 막음. global.holidayDates: 그 날짜가 조율 주에 들어오면 주기상 근무여도 요일 버튼을 막지 않음(공휴일·사내 휴무). global.workDates: 추가 근무일(.env SCHEDULE_GLOBAL_WORK_DATES와 합산). global.blockedDayKeys: 매주 막을 요일(MON..SUN). global.boardGuideText: 조율판 embed **안내** 블록 전체(비우면 기본 문구). 대시보드 /dashboard 에서도 편집·저장 가능.",
+  "__doc__": "조율판 수~화 7일 구간에 포함된 날짜가 global.workDates(및 .env SCHEDULE_GLOBAL_WORK_DATES)에 있으면 그날의 요일 버튼이 빨강(선택 불가). global.holidayDates: 근무일로 지정돼 있어도 그 날은 막지 않음(공휴일·사내 휴무). global.blockedDayKeys: 매주 막을 요일(MON..SUN). global.boardGuideText: 조율판 embed **안내** 블록(비우면 기본). 대시보드 /dashboard 에서도 편집·저장 가능.",
   "global": {
     "blockedDayKeys": [],
     "holidayDates": [],
