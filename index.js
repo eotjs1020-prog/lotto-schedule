@@ -1803,91 +1803,23 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === "일정마감") {
-      if (!interactionMemberIsAdministrator(interaction)) {
-        await interaction.reply({
-          content: "이 명령어는 서버 관리자만 사용할 수 있어요.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const latestSession = findLatestSessionInChannel(interaction.channelId);
-      if (!latestSession) {
-        await interaction.reply({
-          content: "현재 채널에 마감할 활성 조율판이 없어요.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      await interaction.deferReply({ ephemeral: true });
-      try {
-        await closeSessionAndPublishSummary(client, latestSession, "[수동마감]");
-        await interaction.editReply({
-          content: "최신 조율판을 마감하고 집계를 확정했어요.",
-        });
-      } catch (err) {
-        console.error("[일정마감] 처리 실패:", err);
-        try {
-          await interaction.editReply({
-            content: "마감 처리 중 오류가 났어요. 로그를 확인해 주세요.",
-          });
-        } catch (_) {
-          /* interaction may already be invalid */
-        }
-      }
-      return;
-    }
-
-    if (interaction.commandName === "시트불러오기" || interaction.commandName === "sheet_sync") {
-      if (!interactionMemberIsAdministrator(interaction)) {
-        await interaction.reply({
-          content: "이 명령어는 서버 관리자만 사용할 수 있어요. (채널에서 다시 시도해 주세요.)",
-          ephemeral: true,
-        });
-        return;
-      }
-      await interaction.deferReply({ ephemeral: true });
-      try {
-        const r = await importLiveSheetToDiscordSessions(client);
-        let text;
-        if (r.parseError === "no_sheet_config") {
-          text = "GOOGLE_SPREADSHEET_ID 또는 GOOGLE_SHEET_LIVE_RANGE 가 없어 시트를 읽을 수 없어요.";
-        } else if (r.parseError === "no_sheets_client") {
-          text = "Google 서비스 계정(GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY)이 없어요.";
-        } else if (r.parseError === "fetch_failed") {
-          text = "시트를 읽지 못했어요. 스프레드시트 공유·범위를 확인해 주세요.";
-        } else if (r.parseError === "parse_failed") {
-          text = "시트 형식을 해석하지 못했어요. 봇이 쓰는 표(참여자/시작일/마감일/시간/요일 열)와 같은지 확인해 주세요.";
-        } else if (r.matched === 0) {
-          text =
-            "시트의 시작일·마감일과 같은 투표 주간을 가진 활성 조율판이 없어요. (다른 주간 시트이거나 조율판이 없을 수 있어요.)";
-        } else if (r.edited === 0) {
-          text = `주간이 맞는 조율판은 ${r.matched}개인데, 변경할 내용이 없거나 시트 표시명을 디스코드 유저와 연결하지 못했어요. SCHEDULE_SHEET_USER_MAP JSON 또는 A열 \`표시명|유저ID\` 형식을 쓰면 됩니다.`;
-        } else {
-          text = `시트 내용을 ${r.edited}개 조율판 메시지에 반영했어요.`;
-        }
-        await interaction.editReply({ content: text });
-      } catch (err) {
-        console.error("[시트불러오기] 실패:", err);
-        try {
-          await interaction.editReply({
-            content: "처리 중 오류가 났어요. 로그를 확인해 주세요.",
-          });
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      return;
-    }
-
     if (
       interaction.commandName === "일정생성" ||
       interaction.commandName === "일정생성특수" ||
       interaction.commandName === "schedule_special"
     ) {
-      await interaction.deferReply();
+      try {
+        await interaction.deferReply();
+      } catch (deferErr) {
+        const code = deferErr && (deferErr.code ?? deferErr.rawError?.code);
+        if (code === 10062) {
+          console.warn(
+            "[조율판] Unknown interaction(10062) — 디스코드 3초 안에 응답 못 했거나, 같은 봇 토큰이 두 곳에서 동시에 돌고 있을 수 있어요. PC·서버에서 node 중복 실행 여부를 확인하세요."
+          );
+          return;
+        }
+        throw deferErr;
+      }
       try {
         const priorWeekVoteWindow =
           interaction.commandName === "일정생성특수" ||
@@ -1920,6 +1852,101 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }
         } catch (_) {
           /* interaction may already be invalid */
+        }
+      }
+      return;
+    }
+
+    if (interaction.commandName === "일정마감") {
+      if (!interactionMemberIsAdministrator(interaction)) {
+        await interaction.reply({
+          content: "이 명령어는 서버 관리자만 사용할 수 있어요.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const latestSession = findLatestSessionInChannel(interaction.channelId);
+      if (!latestSession) {
+        await interaction.reply({
+          content: "현재 채널에 마감할 활성 조율판이 없어요.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      try {
+        await interaction.deferReply({ ephemeral: true });
+      } catch (deferErr) {
+        if ((deferErr.code ?? deferErr.rawError?.code) === 10062) {
+          console.warn("[일정마감] Unknown interaction(10062) — interaction 만료 또는 봇 중복 실행 가능.");
+          return;
+        }
+        throw deferErr;
+      }
+      try {
+        await closeSessionAndPublishSummary(client, latestSession, "[수동마감]");
+        await interaction.editReply({
+          content: "최신 조율판을 마감하고 집계를 확정했어요.",
+        });
+      } catch (err) {
+        console.error("[일정마감] 처리 실패:", err);
+        try {
+          await interaction.editReply({
+            content: "마감 처리 중 오류가 났어요. 로그를 확인해 주세요.",
+          });
+        } catch (_) {
+          /* interaction may already be invalid */
+        }
+      }
+      return;
+    }
+
+    if (interaction.commandName === "시트불러오기" || interaction.commandName === "sheet_sync") {
+      if (!interactionMemberIsAdministrator(interaction)) {
+        await interaction.reply({
+          content: "이 명령어는 서버 관리자만 사용할 수 있어요. (채널에서 다시 시도해 주세요.)",
+          ephemeral: true,
+        });
+        return;
+      }
+      try {
+        await interaction.deferReply({ ephemeral: true });
+      } catch (deferErr) {
+        if ((deferErr.code ?? deferErr.rawError?.code) === 10062) {
+          console.warn("[시트불러오기] Unknown interaction(10062) — interaction 만료 또는 봇 중복 실행 가능.");
+          return;
+        }
+        throw deferErr;
+      }
+      try {
+        const r = await importLiveSheetToDiscordSessions(client);
+        let text;
+        if (r.parseError === "no_sheet_config") {
+          text = "GOOGLE_SPREADSHEET_ID 또는 GOOGLE_SHEET_LIVE_RANGE 가 없어 시트를 읽을 수 없어요.";
+        } else if (r.parseError === "no_sheets_client") {
+          text = "Google 서비스 계정(GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY)이 없어요.";
+        } else if (r.parseError === "fetch_failed") {
+          text = "시트를 읽지 못했어요. 스프레드시트 공유·범위를 확인해 주세요.";
+        } else if (r.parseError === "parse_failed") {
+          text = "시트 형식을 해석하지 못했어요. 봇이 쓰는 표(참여자/시작일/마감일/시간/요일 열)와 같은지 확인해 주세요.";
+        } else if (r.matched === 0) {
+          text =
+            "시트의 시작일·마감일과 같은 투표 주간을 가진 활성 조율판이 없어요. (다른 주간 시트이거나 조율판이 없을 수 있어요.)";
+        } else if (r.edited === 0) {
+          text = `주간이 맞는 조율판은 ${r.matched}개인데, 변경할 내용이 없거나 시트 표시명을 디스코드 유저와 연결하지 못했어요. SCHEDULE_SHEET_USER_MAP JSON 또는 A열 \`표시명|유저ID\` 형식을 쓰면 됩니다.`;
+        } else {
+          text = `시트 내용을 ${r.edited}개 조율판 메시지에 반영했어요.`;
+        }
+        await interaction.editReply({ content: text });
+      } catch (err) {
+        console.error("[시트불러오기] 실패:", err);
+        try {
+          await interaction.editReply({
+            content: "처리 중 오류가 났어요. 로그를 확인해 주세요.",
+          });
+        } catch (_) {
+          /* ignore */
         }
       }
       return;
