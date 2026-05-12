@@ -348,24 +348,7 @@ function getMergedRepeatCycleConfigForComputation() {
   return cfg;
 }
 
-/** 조율판과 동일한 수~화 7일 구간에서 달력상 근무인 날의 요일 버튼만 막기 */
-function isCycleWorkDayForScheduleBoard(session, isoYmd, dayIndexFromVoteStart, cfg) {
-  if (
-    session.priorWeekVoteWindow === true &&
-    cfg.cycle &&
-    typeof cfg.cycle === "object" &&
-    !cycleAnchorStartsWorkFromFlag(cfg.cycle.anchorStartsWork)
-  ) {
-    if (dayIndexFromVoteStart <= 1) {
-      return false;
-    }
-    if (dayIndexFromVoteStart <= 4) {
-      return true;
-    }
-  }
-  return isCalendarDateWorkDay(isoYmd, cfg);
-}
-
+/** 조율판과 동일한 수~화 7일 구간에서 달력상 근무인 날의 요일 버튼만 막기 (전역 주기만 사용; 한 주 안에 근무·휴무가 1~3일씩 끊겨 보이는 것은 6일 주기를 7일 창으로 자른 자연스러운 결과) */
 function computeCycleBlockedWeekdayKeysForSession(session) {
   const cfg = getMergedRepeatCycleConfigForComputation();
   if (!cfg) {
@@ -379,7 +362,7 @@ function computeCycleBlockedWeekdayKeysForSession(session) {
 
   for (let i = 0; i < 7; i++) {
     const iso = addCalendarDaysToIsoYmd(voteStartIso, i);
-    if (isCycleWorkDayForScheduleBoard(session, iso, i, cfg)) {
+    if (isCalendarDateWorkDay(iso, cfg)) {
       const key = weekdayKeyFromIsoYmd(iso, tz);
       if (key) {
         blocked.add(key);
