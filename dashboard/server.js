@@ -561,10 +561,8 @@ function renderScheduleConfigPanel(sf, hasSave) {
   const hc = hasSave ? "true" : "false";
   return `<article class="embed embed--green">
 ${warn}
-<label class="form-label" for="dashHol">공휴일·휴무일</label>
-<textarea id="dashHol" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-05&#10;2026-10-03">${holLines}</textarea>
-<label class="form-label" for="dashWork">추가 근무일</label>
-<textarea id="dashWork" class="inp ta" rows="4" spellcheck="false" placeholder="2026-05-08">${workLines}</textarea>
+<textarea id="dashHol" hidden readonly tabindex="-1" aria-hidden="true">${holLines}</textarea>
+<textarea id="dashWork" hidden readonly tabindex="-1" aria-hidden="true">${workLines}</textarea>
 <label class="form-label">매주 막을 요일</label>
 <div class="sched-pill-row">${chk}</div>
 <label class="form-label" for="dashGuide">조율판 안내글</label>
@@ -1036,15 +1034,6 @@ function startDashboardIfEnabled(discordClient, options = {}) {
         : "";
     const featuresHtml = renderFeaturesRow(snapshot);
     const boardsHtml = renderBoardsSection(snapshot, guildId);
-    const hasRemote =
-      Boolean(dashboardCloseLatestInChannel) &&
-      Boolean(dashboardImportSheet) &&
-      Boolean(dashboardPostBoard);
-    const defaultCh =
-      snapshot && snapshot.features && typeof snapshot.features.scheduleChannelId === "string"
-        ? snapshot.features.scheduleChannelId
-        : "";
-    const controlHtml = renderRemoteControlPanel(hasRemote, defaultCh);
 
     const mainInner = `<article class="embed embed--brand">
       <p class="embed__kicker">상태</p>
@@ -1062,9 +1051,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
       </div>
     </article>
 
-    ${boardsHtml}
-
-    ${controlHtml}`;
+    ${boardsHtml}`;
 
     res
       .type("text/html; charset=utf-8")
@@ -1109,6 +1096,16 @@ function startDashboardIfEnabled(discordClient, options = {}) {
             usesDefaultGuide: true,
           };
     const schedHtml = renderScheduleConfigPanel(sf, Boolean(saveDashboardScheduleConfig));
+    const hasRemote =
+      Boolean(dashboardCloseLatestInChannel) &&
+      Boolean(dashboardImportSheet) &&
+      Boolean(dashboardPostBoard);
+    const defaultCh =
+      snapshot && snapshot.features && typeof snapshot.features.scheduleChannelId === "string"
+        ? snapshot.features.scheduleChannelId
+        : "";
+    const controlHtml = renderRemoteControlPanel(hasRemote, defaultCh);
+    const scheduleMain = `${schedHtml}\n${controlHtml}`;
 
     res
       .type("text/html; charset=utf-8")
@@ -1117,7 +1114,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
           "schedule",
           "조율 봇 · 스케줄 작성",
           { displayName, guildName },
-          schedHtml
+          scheduleMain
         )
       );
   });
