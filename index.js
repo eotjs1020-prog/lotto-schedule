@@ -503,7 +503,9 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName("일정생성특수")
-    .setDescription("일정생성과 동일한 규칙으로 조율판을 만듭니다. (구분용 별도 명령.)"),
+    .setDescription(
+      "일정생성과 같으나 투표·조율 주간을 '다음 주 수'가 아니라 게시일이 속한 수~화 블록(저번 주기준)의 시작 수요일로 잡습니다."
+    ),
   new SlashCommandBuilder()
     .setName("schedule_special")
     .setDescription("Same as /일정생성 — use if Korean slash UI is unreliable on your client."),
@@ -559,8 +561,9 @@ function makeSessionId() {
 }
 
 /**
- * @param {{ createdAtMs?: number }} [options]
+ * @param {{ createdAtMs?: number; priorWeekVoteWindow?: boolean }} [options]
  *   createdAtMs — 세션 생성 시각(기본: 지금). 테스트·크론 등에서만 지정.
+ *   priorWeekVoteWindow — true면 투표 주간을 "다음 주 수"가 아니라 게시일이 속한 수~화 블록의 시작 수요일(저번 주기준)으로 잡음.
  */
 function registerSession(createdBy, channelId = null, options = {}) {
   const createdAt =
@@ -575,6 +578,7 @@ function registerSession(createdBy, channelId = null, options = {}) {
     channelId,
     messageId: null,
     createdAt,
+    priorWeekVoteWindow: options.priorWeekVoteWindow === true,
   };
   sessions.set(sessionId, session);
   return { sessionId, session };
@@ -1406,8 +1410,9 @@ function formatYearMonthLabelFromIsoYmd(isoYmd) {
 function getVoteWindowIsoForSession(session) {
   const postDayIso = formatCalendarDateInTz(session.createdAt, SCHEDULE_TZ);
   const thisBlockWednesdayIso = getWednesdayIsoContaining(postDayIso);
-  /** 게시(또는 세션 생성)일이 속한 수~화 블록의 **다음 주** 수~화 (기준일·투표 구간·집계 일자 공통) */
-  const weekWednesdayIso = addCalendarDaysToIsoYmd(thisBlockWednesdayIso, 7);
+  /** 기본: 게시일 블록의 **다음** 수요일 시작 주. 일정생성특수: 같은 블록의 시작 수요일(저번 주간 기준). */
+  const wednesdayOffsetDays = session.priorWeekVoteWindow === true ? 0 : 7;
+  const weekWednesdayIso = addCalendarDaysToIsoYmd(thisBlockWednesdayIso, wednesdayOffsetDays);
   const voteStartIso = weekWednesdayIso;
   const voteEndIso = addCalendarDaysToIsoYmd(weekWednesdayIso, 6);
   const referenceWednesdayIso = weekWednesdayIso;
@@ -1884,7 +1889,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     ) {
       await interaction.deferReply();
       try {
-        const { sessionId, session } = registerSession(interaction.user.id, interaction.channelId);
+        const priorWeekVoteWindow =
+          interaction.commandName === "일정생성특수" ||
+          (interaction.commandName === "일정생성" &&
+            interaction.options.getString("모드") === "special");
+        const { sessionId, session } = registerSession(interaction.user.id, interaction.channelId, {
+          priorWeekVoteWindow,
+        });
 
         const embed = buildSummaryEmbed(session);
         const message = await interaction.editReply({
