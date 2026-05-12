@@ -87,7 +87,7 @@ async function discordOAuthTokenExchange({ code, clientId, clientSecret, redirec
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error_description || data.error || res.statusText;
-    throw new Error(String(msg));
+    throw new Error(`token ${res.status}: ${String(msg)}`);
   }
   return data;
 }
@@ -208,11 +208,16 @@ function startDashboardIfEnabled(discordClient, options = {}) {
   const getDashboardSnapshot =
     typeof options.getDashboardSnapshot === "function" ? options.getDashboardSnapshot : null;
 
-  const clientSecret = process.env.DISCORD_CLIENT_SECRET;
-  const redirectUri = process.env.DASHBOARD_OAUTH_REDIRECT_URI;
-  const sessionSecret = process.env.DASHBOARD_SESSION_SECRET;
-  const clientId = process.env.CLIENT_ID;
-  const guildId = process.env.GUILD_ID;
+  const clientSecret = process.env.DISCORD_CLIENT_SECRET
+    ? String(process.env.DISCORD_CLIENT_SECRET).trim()
+    : "";
+  const redirectUriRaw = process.env.DASHBOARD_OAUTH_REDIRECT_URI;
+  const redirectUri = redirectUriRaw ? String(redirectUriRaw).trim() : "";
+  const sessionSecret = process.env.DASHBOARD_SESSION_SECRET
+    ? String(process.env.DASHBOARD_SESSION_SECRET).trim()
+    : "";
+  const clientId = process.env.CLIENT_ID ? String(process.env.CLIENT_ID).trim() : "";
+  const guildId = process.env.GUILD_ID ? String(process.env.GUILD_ID).trim() : "";
 
   const missing = [];
   if (!clientSecret) {
@@ -245,6 +250,11 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     console.warn("[dashboard] 유효한 DASHBOARD_PORT 또는 PORT 가 없습니다.");
     return;
   }
+
+  console.log(
+    "[dashboard] OAuth 설정: redirect_uri는 디스코드 포털 Redirects와 완전히 동일해야 합니다 →",
+    redirectUri
+  );
 
   const app = express();
   app.disable("x-powered-by");
@@ -280,7 +290,12 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     if (err === "oauth") {
       res.status(502).type("text/html; charset=utf-8")
         .send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>로그인 실패</title></head><body>
-<p>디스코드 로그인 처리 중 오류가 났어요. 잠시 후 다시 시도해 주세요.</p>
+<p>디스코드 로그인 처리 중 오류가 났어요.</p>
+<ul>
+  <li>개발자 포털 OAuth2 <strong>Redirects</strong>와 <code>.env</code>의 <code>DASHBOARD_OAUTH_REDIRECT_URI</code>가 <strong>한 글자도 다르지 않게</strong> 같은지 확인 (http/https, 포트, 경로 <code>/auth/discord/callback</code>).</li>
+  <li><code>DISCORD_CLIENT_SECRET</code>은 봇 토큰이 아니라 앱의 <strong>OAuth2 Client Secret</strong>입니다.</li>
+  <li>서버에서: <code>sudo journalctl -u discord-bot -n 30 --no-pager | grep dashboard</code> 로 상세 오류를 확인하세요.</li>
+</ul>
 <p><a href="/dashboard/login">다시 시도</a></p>
 </body></html>`);
       return;
@@ -295,8 +310,17 @@ function startDashboardIfEnabled(discordClient, options = {}) {
   });
 
   app.get("/auth/discord/callback", async (req, res) => {
+    const qErr = typeof req.query.error === "string" ? req.query.error : "";
+    const qDesc =
+      typeof req.query.error_description === "string" ? req.query.error_description : "";
+    if (qErr) {
+      console.error("[dashboard] Discord 콜백 query 오류:", qErr, qDesc || "");
+      res.redirect("/dashboard/login?error=oauth");
+      return;
+    }
     const code = typeof req.query.code === "string" ? req.query.code : "";
     if (!code) {
+      console.error("[dashboard] 콜백에 code 없음 — Redirect URI 불일치·취소·만료 가능");
       res.redirect("/dashboard/login?error=oauth");
       return;
     }
