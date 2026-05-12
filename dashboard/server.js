@@ -407,7 +407,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
       `[dashboard] HTTP ${bindHost}:${listenPort} — /dashboard/login → OAuth · /dashboard · /dashboard/api/snapshot.json`
     );
     console.log(
-      "[dashboard] 다른 PC 브라우저에서는 localhost 대신 이 서버 공인 IP(또는 도메인)로 접속하거나, SSH 터널(-L)을 쓰세요."
+      "[dashboard] 클라우드에 떠 있으면: 다른 PC에서는 localhost 대신 이 인스턴스 공인 IP/도메인으로 접속하거나 SSH -L 터널을 쓰세요."
     );
   });
 }
