@@ -1,6 +1,8 @@
 "use strict";
 
 const http = require("http");
+const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const session = require("express-session");
 
@@ -17,7 +19,41 @@ function escapeHtml(s) {
 
 function isDashboardEnabled() {
   const raw = process.env.DASHBOARD_ENABLE;
-  return raw === "1" || String(raw).toLowerCase() === "true";
+  if (raw === undefined || raw === null) {
+    return false;
+  }
+  const s = String(raw).trim();
+  return s === "1" || s.toLowerCase() === "true";
+}
+
+/** 봇 .env(index.js와 같은 디렉터리)에 DASHBOARD_ENABLE 이 있는지 안내 */
+function dashboardEnvFileHint() {
+  try {
+    const envPath = path.join(__dirname, "..", ".env");
+    if (!fs.existsSync(envPath)) {
+      return `[dashboard] .env 없음 → ${envPath} 생성 후 DASHBOARD_ENABLE=1 추가, sudo systemctl restart discord-bot`;
+    }
+    const text = fs.readFileSync(envPath, "utf8").replace(/^\uFEFF/, "");
+    const lines = text.split(/\n/);
+    const hit = lines.find((line) => {
+      const t = line.trim();
+      return /^DASHBOARD_ENABLE\s*=/i.test(t) && !t.trimStart().startsWith("#");
+    });
+    if (!hit) {
+      return `[dashboard] ${envPath} 에 DASHBOARD_ENABLE= 줄 없음(또는 # 주석). 추가: DASHBOARD_ENABLE=1`;
+    }
+    const m = hit.match(/^\s*DASHBOARD_ENABLE\s*=\s*(.*)$/i);
+    const val = m ? String(m[1]).trim().replace(/^["']|["']$/g, "") : "";
+    if (val === "") {
+      return `[dashboard] ${envPath} 에 DASHBOARD_ENABLE= 만 있고 값이 비어 있음 → DASHBOARD_ENABLE=1`;
+    }
+    if (val !== "1" && val.toLowerCase() !== "true") {
+      return `[dashboard] ${envPath} 값이 "${val}" → 1 또는 true 만 인정됩니다.`;
+    }
+    return `[dashboard] ${envPath} 에는 DASHBOARD_ENABLE=${val} 로 보이는데 process.env 에 없음 → 같은 경로의 index.js로 봇이 실행되는지(systemctl WorkingDirectory·ExecStart) 확인`;
+  } catch (e) {
+    return `[dashboard] .env 점검 실패: ${e.message || e}`;
+  }
 }
 
 function startLegacyHealthServer(port) {
@@ -159,6 +195,7 @@ function startDashboardIfEnabled(discordClient, options = {}) {
     console.log(
       "[dashboard] 비활성(DASHBOARD_ENABLE 이 1 또는 true 가 아님) — 3847 등 HTTP 대시보드는 뜨지 않습니다."
     );
+    console.log(dashboardEnvFileHint());
     const port = process.env.PORT;
     if (port) {
       startLegacyHealthServer(port);
