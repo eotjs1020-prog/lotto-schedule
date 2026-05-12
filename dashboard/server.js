@@ -401,9 +401,13 @@ function startDashboardIfEnabled(discordClient, options = {}) {
 </html>`);
   });
 
-  app.listen(listenPort, () => {
+  const bindHost = (process.env.DASHBOARD_BIND || "0.0.0.0").trim() || "0.0.0.0";
+  app.listen(listenPort, bindHost, () => {
     console.log(
-      `[dashboard] ${listenPort} 포트 — HTML: /dashboard (로그인 /dashboard/login) · JSON: /dashboard/api/snapshot.json`
+      `[dashboard] HTTP ${bindHost}:${listenPort} — /dashboard/login → OAuth · /dashboard · /dashboard/api/snapshot.json`
+    );
+    console.log(
+      "[dashboard] 다른 PC 브라우저에서는 localhost 대신 이 서버 공인 IP(또는 도메인)로 접속하거나, SSH 터널(-L)을 쓰세요."
     );
   });
 }
