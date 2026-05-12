@@ -150,6 +150,11 @@ function renderFeaturesRow(snapshot) {
  * }} [options]
  */
 function startDashboardIfEnabled(discordClient, options = {}) {
+  const dashRaw = process.env.DASHBOARD_ENABLE;
+  console.log(
+    `[dashboard] 시작 점검 (DASHBOARD_ENABLE=${dashRaw === undefined ? "(env에 없음)" : JSON.stringify(String(dashRaw).trim())})`
+  );
+
   if (!isDashboardEnabled()) {
     console.log(
       "[dashboard] 비활성(DASHBOARD_ENABLE 이 1 또는 true 가 아님) — 3847 등 HTTP 대시보드는 뜨지 않습니다."
@@ -420,13 +425,22 @@ function startDashboardIfEnabled(discordClient, options = {}) {
   });
 
   const bindHost = (process.env.DASHBOARD_BIND || "0.0.0.0").trim() || "0.0.0.0";
-  app.listen(listenPort, bindHost, () => {
-    console.log(
-      `[dashboard] HTTP ${bindHost}:${listenPort} — /dashboard/login → OAuth · /dashboard · /dashboard/api/snapshot.json`
-    );
-    console.log(
-      "[dashboard] 클라우드에 떠 있으면: 다른 PC에서는 localhost 대신 이 인스턴스 공인 IP/도메인으로 접속하거나 SSH -L 터널을 쓰세요."
-    );
+  let server;
+  try {
+    server = app.listen(listenPort, bindHost, () => {
+      console.log(
+        `[dashboard] HTTP ${bindHost}:${listenPort} — /dashboard/login → OAuth · /dashboard · /dashboard/api/snapshot.json`
+      );
+      console.log(
+        "[dashboard] 클라우드에 떠 있으면: 다른 PC에서는 localhost 대신 이 인스턴스 공인 IP/도메인으로 접속하거나 SSH -L 터널을 쓰세요."
+      );
+    });
+  } catch (e) {
+    console.error("[dashboard] app.listen 호출 실패:", e && e.message ? e.message : e);
+    return;
+  }
+  server.on("error", (err) => {
+    console.error("[dashboard] listen 오류 (포트 충돌·권한 등):", err && err.code ? err.code : "", err.message || err);
   });
 }
 
