@@ -932,18 +932,47 @@ function getScheduleSheetUserMapFromEnv() {
 }
 
 function rowStrings(row) {
-  return (row || []).map((c) => String(c ?? "").trim());
+  return (row || []).map((c) =>
+    String(c ?? "")
+      .replace(/^\uFEFF/, "")
+      .trim()
+  );
 }
 
 function isScheduleSheetHeaderRowCells(cells) {
   return cells[0] === "참여자" && cells[1] === "시작일" && cells[2] === "마감일";
 }
 
-function isSheetMarkO(cell) {
-  const u = String(cell ?? "")
+/** 시트·세션 라벨 비교용(공백·호환 문자 정리) */
+function normalizeVoteDateLabel(s) {
+  return String(s ?? "")
+    .replace(/^\uFEFF/, "")
     .trim()
-    .toUpperCase();
-  return u === "O" || u === "Y" || u === "TRUE" || u === "1" || u === "✓" || u === "V";
+    .replace(/\s+/g, " ")
+    .normalize("NFKC");
+}
+
+function isSheetMarkO(cell) {
+  const raw = String(cell ?? "").trim();
+  if (!raw) {
+    return false;
+  }
+  if (raw === true || raw === 1) {
+    return true;
+  }
+  const u = raw.normalize("NFKC").toUpperCase();
+  if (u === "O" || u === "Y" || u === "TRUE" || u === "1" || u === "V" || u === "ON" || u === "OK") {
+    return true;
+  }
+  if (u === "✓" || u === "✔" || u === "☑" || u === "✅") {
+    return true;
+  }
+  const n = u.replace(/\s/g, "");
+  if (n === "O" || n === "Y" || n === "TRUE" || n === "1") {
+    return true;
+  }
+  const circle = raw.normalize("NFKC");
+  return circle === "○" || circle === "⭕" || circle === "●" || circle === "◯";
 }
 
 /**
@@ -1075,9 +1104,9 @@ function parseLiveSheetValuesToParticipants(values) {
 function sessionVoteWindowLabelsMatchSheet(session, startLabel, endLabel) {
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
-  return (
-    formatIsoYmdForBoard(voteStartIso) === startLabel && formatIsoYmdForBoard(voteEndIso) === endLabel
-  );
+  const a = normalizeVoteDateLabel(formatIsoYmdForBoard(voteStartIso));
+  const b = normalizeVoteDateLabel(formatIsoYmdForBoard(voteEndIso));
+  return a === normalizeVoteDateLabel(startLabel) && b === normalizeVoteDateLabel(endLabel);
 }
 
 function resolveSheetParticipantToUserId(displayNameRaw, session) {
@@ -1221,6 +1250,7 @@ async function importLiveSheetToDiscordSessions(client) {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: readRange,
+      valueRenderOption: "FORMATTED_VALUE",
     });
     values = res.data.values;
   } catch (error) {
@@ -1233,6 +1263,33 @@ async function importLiveSheetToDiscordSessions(client) {
   if (!parsed) {
     out.parseError = "parse_failed";
     return out;
+  }
+
+  const sessionsWithBoard = [...sessions.values()].filter((s) => s.messageId && s.channelId);
+  if (sessionsWithBoard.length > 0 && parsed.startLabel && parsed.endLabel) {
+    let anyLabelMatch = false;
+    for (const session of sessionsWithBoard) {
+      if (sessionVoteWindowLabelsMatchSheet(session, parsed.startLabel, parsed.endLabel)) {
+        anyLabelMatch = true;
+        break;
+      }
+    }
+    if (!anyLabelMatch) {
+      const sample = sessionsWithBoard[0];
+      const src = sample.createdAt ? sample : { ...sample, createdAt: Date.now() };
+      const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(src);
+      console.warn(
+        "[실시간시트→디스코드] 시트 시작/마감일과 조율판 세션이 안 맞음. 시트:",
+        parsed.startLabel,
+        "|",
+        parsed.endLabel,
+        "→ 세션(첫 예시):",
+        formatIsoYmdForBoard(voteStartIso),
+        "|",
+        formatIsoYmdForBoard(voteEndIso),
+        "(첫 참가자 행의 시작일·마감일 셀을 조율판과 동일하게 맞추세요.)"
+      );
+    }
   }
 
   for (const [sessionId, session] of sessions) {
