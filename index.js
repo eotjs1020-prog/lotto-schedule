@@ -766,7 +766,7 @@ async function rotateLiveWorksheetAfterClose(session) {
   const newRangeQuoted = makeQuotedSheetRange(finalTitle, a1Span);
   const clearRows = Math.min(
     2000,
-    Math.max(80, Number.parseInt(process.env.SCHEDULE_LIVE_SHEET_CLEAR_MAX_ROWS ?? "200", 10) || 200)
+    Math.max(1, Number.parseInt(process.env.SCHEDULE_LIVE_SHEET_CLEAR_MAX_ROWS ?? "50", 10) || 50)
   );
   try {
     const clearRange = getLiveSyncValuesOnlyRange(newRangeQuoted, clearRows);
