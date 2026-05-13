@@ -840,6 +840,12 @@ function isLiveSheetRotateDuplicateSheetEnabled() {
   return v !== "0" && v !== "false" && v !== "no" && v !== "off";
 }
 
+/** `/일정생성`·대시보드 조율판 게시 시 `GOOGLE_SHEET_LIVE_RANGE` 탭을 복제해 새 주간 탭으로 전환. 끄려면 `0`. */
+function isLiveSessionCreateSheetDuplicateEnabled() {
+  const v = String(process.env.SCHEDULE_LIVE_DUPLICATE_SHEET_ON_SESSION_CREATE ?? "1").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "no" && v !== "off";
+}
+
 function getA1SpanFromLiveRange(liveRange) {
   const s = String(liveRange || "").trim();
   const b = s.indexOf("!");
@@ -988,30 +994,21 @@ async function sheetsWriteLiveSyncFixedParticipantBlocks(sheets, spreadsheetId, 
   });
 }
 
-async function rotateLiveWorksheetAfterClose(session) {
-  if (!isLiveSheetRotateOnCloseEnabled()) {
-    return;
-  }
-  if (!isLiveSheetRotateDuplicateSheetEnabled()) {
-    console.log(
-      "[시트탭로테이트] 시트 복제·탭 전환 생략(SCHEDULE_LIVE_SHEET_ROTATE_DUPLICATE_SHEET=0) — GOOGLE_SHEET_LIVE_RANGE 탭·.schedule-live-sheet.json 은 그대로"
-    );
-    return;
-  }
+/**
+ * `getLiveSheetDuplicateSourceRange()` 마스터 탭을 주간 이름으로 복제하고 조율 칸만 비운 뒤 `.schedule-live-sheet.json`에 전환.
+ * @returns {Promise<boolean>}
+ */
+async function duplicateMasterLiveSheetToWeekTabAndSwitch(session, logPrefix) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  const base = getEffectiveLiveRange();
-  if (!spreadsheetId || !base) {
-    console.warn("[시트탭로테이트] GOOGLE_SPREADSHEET_ID 또는 실시간 범위(.env 또는 상태 파일)가 없어 건너뜁니다.");
-    return;
-  }
   const dupSourceRange = getLiveSheetDuplicateSourceRange();
-  if (!dupSourceRange) {
-    console.warn("[시트탭로테이트] 복제 원본 범위를 정하지 못했습니다.");
-    return;
+  if (!spreadsheetId || !dupSourceRange || !dupSourceRange.includes("!")) {
+    console.warn(`${logPrefix} GOOGLE_SPREADSHEET_ID 또는 LIVE 복제 원본 범위가 없어 탭 복제를 건너뜁니다.`);
+    return false;
   }
   const sheets = await getSheetsClient();
   if (!sheets) {
-    return;
+    console.warn(`${logPrefix} Google Sheets 클라이언트 없음 — 탭 복제 건너뜀`);
+    return false;
   }
   const a1Span = getA1SpanFromLiveRange(dupSourceRange);
   const meta = await sheets.spreadsheets.get({
@@ -1026,7 +1023,6 @@ async function rotateLiveWorksheetAfterClose(session) {
     voteStartIso && /^\d{4}-\d{2}-\d{2}$/.test(String(voteStartIso).trim())
       ? String(voteStartIso).trim()
       : formatCalendarDateInTz(Date.now(), SCHEDULE_TZ);
-  /** 탭 이름은 ASCII만(투표 시작 수요일 `YYYYMMDD`) — 한글 탭명으로 API·메타 매칭 꼬임 방지 */
   const ymdDigits = iso.replace(/-/g, "").replace(/\D/g, "").slice(0, 8) || "00000000";
   let baseTitle = ymdDigits.replace(/[\[\]\*\?\/\\:]/g, "_").slice(0, 90);
   let newTitle = baseTitle;
@@ -1044,8 +1040,8 @@ async function rotateLiveWorksheetAfterClose(session) {
   if (sourceSheetId === undefined || sourceSheetId === null) {
     const available = sheetsList.map((s) => s.properties?.title).filter(Boolean);
     console.warn(
-      `[시트탭로테이트] 소스 시트 이름을 찾지 못했습니다. LIVE 범위에서 읽은 이름: "${sourceTitle}". ` +
-        `스프레드시트 탭 목록: ${available.length ? available.join(", ") : "(없음)"} — 빈 탭으로 만듭니다.`
+      `${logPrefix} 소스 시트 이름을 찾지 못했습니다. LIVE에서 읽은 이름: "${sourceTitle}". ` +
+        `탭 목록: ${available.length ? available.join(", ") : "(없음)"} — 빈 탭으로 만듭니다.`
     );
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -1085,18 +1081,18 @@ async function rotateLiveWorksheetAfterClose(session) {
       }
       if (!r0?.duplicateSheet) {
         console.warn(
-          "[시트탭로테이트] duplicateSheet API 응답에 duplicateSheet 필드가 없습니다. replies[0]=",
+          `${logPrefix} duplicateSheet API 응답에 duplicateSheet 필드가 없습니다. replies[0]=`,
           JSON.stringify(r0)
         );
       } else {
         console.log(
-          `[시트탭로테이트] 시트 복제 성공: "${sourceSheet.properties?.title}" → "${finalTitle}" (sheetId ${dupProps?.sheetId ?? "?"})`
+          `${logPrefix} 시트 복제: "${sourceSheet.properties?.title}" → "${finalTitle}" (sheetId ${dupProps?.sheetId ?? "?"})`
         );
       }
     } catch (dupErr) {
       const apiData = dupErr && dupErr.response && dupErr.response.data;
       console.warn(
-        "[시트탭로테이트] 시트 복제(duplicateSheet) 실패 — 빈 탭으로 대체:",
+        `${logPrefix} duplicateSheet 실패 — 빈 탭으로 대체:`,
         dupErr?.message || dupErr,
         apiData ? JSON.stringify(apiData) : ""
       );
@@ -1120,7 +1116,6 @@ async function rotateLiveWorksheetAfterClose(session) {
   }
 
   const newRangeQuoted = makeQuotedSheetRange(finalTitle, a1Span);
-  /** 마스터 복제본에 예전 참가자 블록이 50행 아래까지 남는 문제: 마감 직후 clear는 최소 500행(또는 ROTATE 전용 env). */
   const legacyClear = Math.max(1, Number.parseInt(process.env.SCHEDULE_LIVE_SHEET_CLEAR_MAX_ROWS ?? "50", 10) || 50);
   const rotateExplicit = Number.parseInt(String(process.env.SCHEDULE_LIVE_SHEET_ROTATE_CLEAR_MAX_ROWS ?? "").trim(), 10);
   const clearRows = Math.min(
@@ -1137,7 +1132,7 @@ async function rotateLiveWorksheetAfterClose(session) {
     const newSh = findSheetByTitleLoose(metaAfter.data.sheets || [], finalTitle);
     const newSid = newSh?.properties?.sheetId;
     if (newSid === undefined || newSid === null) {
-      console.warn("[시트탭로테이트] 복제 탭 sheetId 조회 실패:", finalTitle);
+      console.warn(`${logPrefix} 복제 탭 sheetId 조회 실패:`, finalTitle);
     } else {
       const spanForClear = getA1SpanFromLiveRange(dupSourceRange);
       const endColLetter = a1IndexToColumnLetters(getScheduleGridColumnCount());
@@ -1157,13 +1152,13 @@ async function rotateLiveWorksheetAfterClose(session) {
             ranges.push(makeQuotedSheetRange(finalTitle, `A${dataTop1}:${endColLetter}${dataBot1}`));
           }
           if (ranges.length === 0) {
-            console.warn("[시트탭로테이트] 고정헤더: 비울 데이터 구간 없음");
+            console.warn(`${logPrefix} 고정헤더: 비울 데이터 구간 없음`);
           } else {
             await sheets.spreadsheets.values.batchClear({
               spreadsheetId,
               requestBody: { ranges },
             });
-            console.log("[시트탭로테이트] 복제 탭 데이터칸만 batchClear(헤더 유지):", ranges.length, "구간");
+            console.log(`${logPrefix} 복제 탭 데이터칸만 batchClear:`, ranges.length, "구간");
           }
         } else {
           const clearRangeQuoted = makeQuotedSheetRange(finalTitle, `A1:${endColLetter}${clearBottom1}`);
@@ -1171,13 +1166,10 @@ async function rotateLiveWorksheetAfterClose(session) {
             spreadsheetId,
             range: clearRangeQuoted,
           });
-          console.log("[시트탭로테이트] 복제 탭 조율칸만 클리어(A~K, N~U 유지):", clearRangeQuoted);
+          console.log(`${logPrefix} 복제 탭 조율칸 클리어(A~K):`, clearRangeQuoted);
         }
       } catch (clearValErr) {
-        console.warn(
-          "[시트탭로테이트] values.clear/batchClear 실패, grid로 비움:",
-          clearValErr?.message || clearValErr
-        );
+        console.warn(`${logPrefix} values.clear/batchClear 실패, grid로 비움:`, clearValErr?.message || clearValErr);
         const colCount = getScheduleGridColumnCount();
         if (isLiveSyncFixedSheetHeadersEnabled()) {
           for (let u = 0; ; u += 1) {
@@ -1196,13 +1188,44 @@ async function rotateLiveWorksheetAfterClose(session) {
       }
     }
   } catch (clearErr) {
-    console.warn("[시트탭로테이트] 복제 탭 값 비우기(grid) 실패(다음 동기화에서 덮어씀):", clearErr?.message || clearErr);
+    console.warn(`${logPrefix} 복제 탭 값 비우기 실패:`, clearErr?.message || clearErr);
   }
 
   writeLiveSheetRangeOverride(newRangeQuoted);
-  console.log(
-    `[시트탭로테이트] 복제 원본 "${sourceTitle}" → 새 탭 "${finalTitle}" 초기화 후 실시간 범위: ${newRangeQuoted} (상태: ${getLiveSheetStatePath()})`
-  );
+  console.log(`${logPrefix} 실시간 범위 전환: ${newRangeQuoted} (상태: ${getLiveSheetStatePath()})`);
+  return true;
+}
+
+async function rotateLiveWorksheetAfterClose(session) {
+  if (!isLiveSheetRotateOnCloseEnabled()) {
+    return;
+  }
+  if (!isLiveSheetRotateDuplicateSheetEnabled()) {
+    console.log(
+      "[시트탭로테이트] 시트 복제·탭 전환 생략(SCHEDULE_LIVE_SHEET_ROTATE_DUPLICATE_SHEET=0) — GOOGLE_SHEET_LIVE_RANGE 탭·.schedule-live-sheet.json 은 그대로"
+    );
+    return;
+  }
+  if (!process.env.GOOGLE_SPREADSHEET_ID || !String(process.env.GOOGLE_SPREADSHEET_ID).trim()) {
+    console.warn("[시트탭로테이트] GOOGLE_SPREADSHEET_ID가 없어 건너뜁니다.");
+    return;
+  }
+  await duplicateMasterLiveSheetToWeekTabAndSwitch(session, "[시트탭로테이트]");
+}
+
+/** `/일정생성`·대시보드 게시 시: 마스터(`GOOGLE_SHEET_LIVE_RANGE`) 복제 → 새 탭으로 전환 후 그곳에 동기화 */
+async function duplicateLiveSheetOnSessionCreateIfEnabled(session) {
+  if (!isLiveSessionCreateSheetDuplicateEnabled()) {
+    return;
+  }
+  try {
+    const ok = await duplicateMasterLiveSheetToWeekTabAndSwitch(session, "[일정생성·시트]");
+    if (!ok) {
+      console.warn("[일정생성·시트] 마스터 탭 복제·전환 실패 — 현재 LIVE로 동기화합니다.");
+    }
+  } catch (e) {
+    console.warn("[일정생성·시트] 탭 복제 중 오류:", e?.message || e);
+  }
 }
 
 /**
@@ -2631,6 +2654,7 @@ async function runWeeklyOpenJob(client, logPrefix = "[크론]") {
       return;
     }
     const { sessionId, session } = registerSession(client.user.id, channel.id);
+    await duplicateLiveSheetOnSessionCreateIfEnabled(session);
     const message = await channel.send({
       embeds: [buildSummaryEmbed(session)],
       components: buildComponents(sessionId, session),
@@ -2800,6 +2824,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
 
         await ensureSessionSeedParticipant(interaction.client, session);
+
+        await duplicateLiveSheetOnSessionCreateIfEnabled(session);
 
         const embed = buildSummaryEmbed(session);
         const message = await interaction.editReply({
@@ -3327,6 +3353,7 @@ async function dashboardControlPostBoard(channelId, mode, referenceWednesdayIso)
   }
   const { sessionId, session } = registerSession(client.user.id, v.channel.id, opts);
   await ensureSessionSeedParticipant(client, session);
+  await duplicateLiveSheetOnSessionCreateIfEnabled(session);
   const message = await v.channel.send({
     embeds: [buildSummaryEmbed(session)],
     components: buildComponents(sessionId, session),
