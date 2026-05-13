@@ -1040,6 +1040,7 @@ async function syncSessionSummaryToLiveSheet(session) {
     },
   });
   console.log("[실시간시트] 동기화 완료:", valuesRange);
+}
 
 function scheduleLiveSheetSync(session) {
   const sessionId = session.id;
