@@ -694,7 +694,7 @@ function getEffectiveLiveRange() {
  * 마감 후 탭 복제 시 **원본으로 삼을 시트** 범위.
  * `.env`의 `GOOGLE_SHEET_LIVE_RANGE`가 있으면 항상 그 탭(마스터·서식 템플릿)을 복제하고,
  * 없을 때만 현재 effective(상태 파일 또는 env)를 씁니다.
- * — 상태 JSON이 `조율_*`만 가리킬 때 복제 원본이 빈 탭이 되는 문제를 막습니다.
+ * — 상태 JSON이 날짜 탭만 가리킬 때 복제 원본이 빈 탭이 되는 문제를 막습니다.
  */
 function getLiveSheetDuplicateSourceRange() {
   const env = process.env.GOOGLE_SHEET_LIVE_RANGE && String(process.env.GOOGLE_SHEET_LIVE_RANGE).trim();
@@ -819,8 +819,13 @@ async function rotateLiveWorksheetAfterClose(session) {
   const titles = new Set(sheetsList.map((s) => s.properties?.title).filter(Boolean));
   const src = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso } = getVoteWindowIsoForSession(src);
-  const tag = String(voteStartIso || "주간").replace(/-/g, "");
-  let baseTitle = `조율_${tag}`.replace(/[\[\]\*\?\/\\]/g, "_").slice(0, 90);
+  const iso =
+    voteStartIso && /^\d{4}-\d{2}-\d{2}$/.test(String(voteStartIso).trim())
+      ? String(voteStartIso).trim()
+      : formatCalendarDateInTz(Date.now(), SCHEDULE_TZ);
+  /** 탭 이름은 ASCII만(투표 시작 수요일 `YYYYMMDD`) — 한글 탭명으로 API·메타 매칭 꼬임 방지 */
+  const ymdDigits = iso.replace(/-/g, "").replace(/\D/g, "").slice(0, 8) || "00000000";
+  let baseTitle = ymdDigits.replace(/[\[\]\*\?\/\\:]/g, "_").slice(0, 90);
   let newTitle = baseTitle;
   let n = 0;
   while (titles.has(newTitle)) {
@@ -951,7 +956,7 @@ async function rotateLiveWorksheetAfterClose(session) {
  * - 아니면 **실시간 조율이 쓰는 탭**(`getEffectiveLiveRange`의 탭 이름 + `!A:Z`) — `GOOGLE_SHEET_RANGE`와 다를 때 마스터 맨 아래에 쌓이던 문제를 막음.
  * - 실시간 범위가 없을 때만 `GOOGLE_SHEET_RANGE`.
  *
- * 마감 시에는 로테이트 전에 이 값을 한 번 구해 두었다가(`appendRangeFrozen`) 탭 전환 후에도 **같은 문자열**로 append 해야, 집계가 방금 마감한 주의 `조율_*` 탭 하단에 붙음.
+ * 마감 시에는 로테이트 전에 이 값을 한 번 구해 두었다가(`appendRangeFrozen`) 탭 전환 후에도 **같은 문자열**로 append 해야, 집계가 방금 마감한 주의 실시간 탭(예: `20260520`) 하단에 붙음.
  */
 function resolveDefaultAppendSpreadsheetRange() {
   const custom = process.env.GOOGLE_SHEET_APPEND_RANGE && String(process.env.GOOGLE_SHEET_APPEND_RANGE).trim();
