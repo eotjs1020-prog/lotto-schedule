@@ -668,6 +668,20 @@ function makeQuotedSheetRange(sheetTitle, a1Span) {
   return `'${esc}'!${a1Span}`;
 }
 
+function findSheetByTitleLoose(sheetsList, wantedTitle) {
+  const list = sheetsList || [];
+  const raw = String(wantedTitle || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const exact = list.find((s) => String(s.properties?.title || "").trim() === raw);
+  if (exact) {
+    return exact;
+  }
+  const low = raw.toLowerCase();
+  return list.find((s) => String(s.properties?.title || "").trim().toLowerCase() === low) || null;
+}
+
 async function rotateLiveWorksheetAfterClose(session) {
   if (!isLiveSheetRotateOnCloseEnabled()) {
     return;
@@ -701,11 +715,33 @@ async function rotateLiveWorksheetAfterClose(session) {
   }
 
   const sourceTitle = getSheetTitleFromRange(base, "Sheet1");
-  const sourceSheet = sheetsList.find((s) => s.properties?.title === sourceTitle);
+  const sourceSheet = findSheetByTitleLoose(sheetsList, sourceTitle);
   const sourceSheetId = sourceSheet?.properties?.sheetId;
   let finalTitle = newTitle;
 
-  if (sourceSheetId !== undefined && sourceSheetId !== null) {
+  if (sourceSheetId === undefined || sourceSheetId === null) {
+    const available = sheetsList.map((s) => s.properties?.title).filter(Boolean);
+    console.warn(
+      `[시트탭로테이트] 소스 시트 이름을 찾지 못했습니다. LIVE 범위에서 읽은 이름: "${sourceTitle}". ` +
+        `스프레드시트 탭 목록: ${available.length ? available.join(", ") : "(없음)"} — 빈 탭으로 만듭니다.`
+    );
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: newTitle,
+                gridProperties: { rowCount: 200, columnCount: 30 },
+              },
+            },
+          },
+        ],
+      },
+    });
+    finalTitle = newTitle;
+  } else {
     try {
       const dupRes = await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
@@ -720,12 +756,28 @@ async function rotateLiveWorksheetAfterClose(session) {
           ],
         },
       });
-      const dupProps = dupRes.data?.replies?.[0]?.duplicateSheet?.properties;
+      const r0 = dupRes.data?.replies?.[0];
+      const dupProps = r0?.duplicateSheet?.properties;
       if (dupProps && typeof dupProps.title === "string" && dupProps.title.trim()) {
         finalTitle = dupProps.title.trim();
       }
+      if (!r0?.duplicateSheet) {
+        console.warn(
+          "[시트탭로테이트] duplicateSheet API 응답에 duplicateSheet 필드가 없습니다. replies[0]=",
+          JSON.stringify(r0)
+        );
+      } else {
+        console.log(
+          `[시트탭로테이트] 시트 복제 성공: "${sourceSheet.properties?.title}" → "${finalTitle}" (sheetId ${dupProps?.sheetId ?? "?"})`
+        );
+      }
     } catch (dupErr) {
-      console.warn("[시트탭로테이트] 시트 복제(duplicateSheet) 실패 — 빈 탭으로 대체:", dupErr?.message || dupErr);
+      const apiData = dupErr && dupErr.response && dupErr.response.data;
+      console.warn(
+        "[시트탭로테이트] 시트 복제(duplicateSheet) 실패 — 빈 탭으로 대체:",
+        dupErr?.message || dupErr,
+        apiData ? JSON.stringify(apiData) : ""
+      );
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
         requestBody: {
@@ -743,24 +795,6 @@ async function rotateLiveWorksheetAfterClose(session) {
       });
       finalTitle = newTitle;
     }
-  } else {
-    console.warn(`[시트탭로테이트] 소스 시트 "${sourceTitle}" 를 찾지 못해 빈 탭으로 만듭니다.`);
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            addSheet: {
-              properties: {
-                title: newTitle,
-                gridProperties: { rowCount: 200, columnCount: 30 },
-              },
-            },
-          },
-        ],
-      },
-    });
-    finalTitle = newTitle;
   }
 
   const newRangeQuoted = makeQuotedSheetRange(finalTitle, a1Span);
