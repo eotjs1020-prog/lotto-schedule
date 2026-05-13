@@ -532,6 +532,54 @@ function buildSheetRowsForSession(session) {
   return rows;
 }
 
+/**
+ * 시트에 헤더가 이미 있을 때 쓰는 실시간 동기화용: 참가자당 `TIME_SLOTS` 길이만큼의 행만(헤더 없음).
+ * @returns {string[][][]}
+ */
+function buildLiveSyncParticipantGroups(session) {
+  const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
+  const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
+  const startLabel = voteStartIso;
+  const endLabel = voteEndIso;
+  /** @type {string[][][]} */
+  const groups = [];
+
+  function pushUserRows(userData) {
+    const chunk = [];
+    TIME_SLOTS.forEach((time, timeIndex) => {
+      chunk.push([
+        timeIndex === 0 ? userData.username || "" : "",
+        timeIndex === 0 ? startLabel : "",
+        timeIndex === 0 ? endLabel : "",
+        time,
+        ...DAYS.map((day) => {
+          const times = userData.selectedDayTimes?.get(day.key);
+          return times && times.has(time) ? "O" : "X";
+        }),
+      ]);
+    });
+    groups.push(chunk);
+  }
+
+  for (const [, userData] of session.users.entries()) {
+    pushUserRows(userData);
+  }
+  if (session.users.size === 0) {
+    const chunk = [];
+    TIME_SLOTS.forEach((time, timeIndex) => {
+      chunk.push([
+        timeIndex === 0 ? "참여자 없음" : "",
+        timeIndex === 0 ? startLabel : "",
+        timeIndex === 0 ? endLabel : "",
+        time,
+        ...DAYS.map(() => "X"),
+      ]);
+    });
+    groups.push(chunk);
+  }
+  return groups;
+}
+
 function getSheetTitleFromRange(range, fallback = "Sheet1") {
   const rawSheetName = range.includes("!") ? range.split("!")[0] : fallback;
   return rawSheetName.replace(/^'(.*)'$/, "$1");
@@ -591,6 +639,27 @@ function parseA1Cell(ref) {
   return { col, colIndex, row };
 }
 
+function isLiveSyncFixedSheetHeadersEnabled() {
+  const v = String(process.env.SCHEDULE_LIVE_SYNC_FIXED_SHEET_HEADERS ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+/** 첫 블록의 헤더 행(1-based). 시트에 고정된 「참여자 / 시작일 / …」 줄. */
+function getLiveSyncTemplateHeaderRow1() {
+  const n = Number.parseInt(String(process.env.SCHEDULE_LIVE_SYNC_TEMPLATE_HEADER_ROW ?? "1").trim(), 10);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+/** 헤더 1행 + 참가자별 `TIME_SLOTS` 행까지 한 블록의 행 수(기본 6). */
+function getLiveSyncTemplateBlockRowCount() {
+  const minBlock = TIME_SLOTS.length + 1;
+  const n = Number.parseInt(String(process.env.SCHEDULE_LIVE_SYNC_TEMPLATE_BLOCK_ROWS ?? "").trim(), 10);
+  if (!Number.isFinite(n) || n < minBlock) {
+    return minBlock;
+  }
+  return n;
+}
+
 /**
  * LIVE A1 span의 **왼쪽 위 셀** — `getLiveSyncDataStartRow1FromLiveRange`에서 **행** 힌트만 씀.
  * 조율 표 **열**은 항상 A부터 11열(고정); LIVE에 M9 등이 있어도 쓰기·읽기 열은 A로 둠.
@@ -604,9 +673,10 @@ function getLiveSyncGridAnchorFromLiveRange(liveRange) {
 }
 
 /**
- * 조율 표가 들어갈 **첫 행(1-based)**.
- * - `SCHEDULE_LIVE_SYNC_DATA_START_ROW` 가 있으면 그대로(1이면 진짜 1행부터).
- * - 없으면 LIVE 왼쪽 위 **행**: **1행이면 기본 9행** — 위 병합·타이틀(1~8) 템플릿. 1행부터 쓰려면 `SCHEDULE_LIVE_SYNC_DATA_START_ROW=1`.
+ * 조율 표가 들어갈 **첫 데이터 행(1-based)** (실시간 쓰기 기준).
+ * - `SCHEDULE_LIVE_SYNC_FIXED_SHEET_HEADERS=1` 이면 시트에 헤더가 있으므로 `TEMPLATE_HEADER_ROW+1` (또는 `SCHEDULE_LIVE_SYNC_DATA_START_ROW`로 덮어씀).
+ * - `SCHEDULE_LIVE_SYNC_DATA_START_ROW` 가 있으면 그대로.
+ * - 없으면 LIVE 왼쪽 위 **행**: **1행이면 기본 9행** — 위 병합·타이틀(1~8) 템플릿.
  */
 function getLiveSyncDataStartRow1FromLiveRange(liveRange) {
   const ovr = process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW && String(process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW).trim();
@@ -616,6 +686,9 @@ function getLiveSyncDataStartRow1FromLiveRange(liveRange) {
       return n;
     }
   }
+  if (isLiveSyncFixedSheetHeadersEnabled()) {
+    return getLiveSyncTemplateHeaderRow1() + 1;
+  }
   const anchor = getLiveSyncGridAnchorFromLiveRange(liveRange);
   const r = Math.max(1, anchor.row);
   if (r === 1) {
@@ -624,8 +697,17 @@ function getLiveSyncDataStartRow1FromLiveRange(liveRange) {
   return r;
 }
 
-/** 실시간 조율 값: **항상 A열~11열**, `getLiveSyncDataStartRow1FromLiveRange` **행**부터. */
-function getLiveSyncValuesOnlyRange(liveRange, dataRowCount, verticalMode = "full") {
+/** 시트 →디스코드 읽기 시 첫 행(1-based). 고정 헤더 모드면 1행부터 읽어 중간 헤더 줄도 파싱에 넘김. */
+function getLiveSyncReadTopRow1(liveRange) {
+  if (isLiveSyncFixedSheetHeadersEnabled()) {
+    return 1;
+  }
+  return getLiveSyncDataStartRow1FromLiveRange(liveRange);
+}
+
+/** 실시간 조율 값: **항상 A열~11열**. `opts.forImport` 이면 읽기 시작 행은 `getLiveSyncReadTopRow1`. */
+function getLiveSyncValuesOnlyRange(liveRange, dataRowCount, verticalMode = "full", opts = {}) {
+  const forImport = opts && opts.forImport === true;
   const bang = liveRange.indexOf("!");
   const a1Part = (bang >= 0 ? liveRange.slice(bang + 1) : liveRange).trim();
   const span = a1Part.includes(":") ? a1Part : `${a1Part}:${a1Part}`;
@@ -635,7 +717,7 @@ function getLiveSyncValuesOnlyRange(liveRange, dataRowCount, verticalMode = "ful
   const endParsed = parseA1Cell(rightRaw) || anchor;
   const rowSpan = Math.max(1, Number(dataRowCount) || 1);
   const envBottom = Math.max(anchor.row, endParsed.row);
-  const topRow1 = getLiveSyncDataStartRow1FromLiveRange(liveRange);
+  const topRow1 = forImport ? getLiveSyncReadTopRow1(liveRange) : getLiveSyncDataStartRow1FromLiveRange(liveRange);
   const bottomRow =
     verticalMode === "tight"
       ? topRow1 + rowSpan - 1
@@ -816,6 +898,40 @@ async function sheetsOverwriteUserEnteredGridFromA1(
   });
 }
 
+/** 고정 헤더 시트: 참가자별 블록만 `updateCells`(헤더 행은 건드리지 않음). */
+async function sheetsWriteLiveSyncFixedParticipantBlocks(sheets, spreadsheetId, sheetId, groups, liveRange) {
+  const firstDataRow1 = getLiveSyncDataStartRow1FromLiveRange(liveRange);
+  const br = getLiveSyncTemplateBlockRowCount();
+  const colCount = getScheduleGridColumnCount();
+  if (br < TIME_SLOTS.length + 1) {
+    console.warn("[실시간시트] TEMPLATE_BLOCK_ROWS 가 너무 작음 — 최소", TIME_SLOTS.length + 1);
+  }
+  const requests = (groups || []).map((rows, u) => {
+    const startR = Math.max(0, firstDataRow1 - 1 + u * br);
+    const rowData = buildRowDataForUserEnteredGrid(rows);
+    return {
+      updateCells: {
+        range: {
+          sheetId,
+          startRowIndex: startR,
+          endRowIndex: startR + rows.length,
+          startColumnIndex: 0,
+          endColumnIndex: colCount,
+        },
+        rows: rowData,
+        fields: "userEnteredValue",
+      },
+    };
+  });
+  if (requests.length === 0) {
+    return;
+  }
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+}
+
 async function rotateLiveWorksheetAfterClose(session) {
   if (!isLiveSheetRotateOnCloseEnabled()) {
     return;
@@ -962,24 +1078,59 @@ async function rotateLiveWorksheetAfterClose(session) {
       console.warn("[시트탭로테이트] 복제 탭 sheetId 조회 실패:", finalTitle);
     } else {
       const spanForClear = getA1SpanFromLiveRange(dupSourceRange);
-      /** LIVE가 `…!A1:U50`처럼 넓어도 조율 블록은 A~K만 비움. N~U 등 오른쪽 사용자 영역은 건드리지 않음. */
       const endColLetter = a1IndexToColumnLetters(getScheduleGridColumnCount());
       const clearBottom1 = Math.min(2000, getClearValuesBottomRow1FromA1Span(spanForClear, clearRows));
-      const clearRangeQuoted = makeQuotedSheetRange(finalTitle, `A1:${endColLetter}${clearBottom1}`);
+      const br = getLiveSyncTemplateBlockRowCount();
+      const tr = TIME_SLOTS.length;
+      const firstDataRow1 = getLiveSyncDataStartRow1FromLiveRange(getEffectiveLiveRange() || dupSourceRange);
       try {
-        await sheets.spreadsheets.values.clear({
-          spreadsheetId,
-          range: clearRangeQuoted,
-        });
-        console.log("[시트탭로테이트] 복제 탭 조율칸만 클리어(A~K, N~U 유지):", clearRangeQuoted);
+        if (isLiveSyncFixedSheetHeadersEnabled()) {
+          const ranges = [];
+          for (let u = 0; ; u += 1) {
+            const dataTop1 = firstDataRow1 + u * br;
+            if (dataTop1 > clearBottom1) {
+              break;
+            }
+            const dataBot1 = Math.min(dataTop1 + tr - 1, clearBottom1);
+            ranges.push(makeQuotedSheetRange(finalTitle, `A${dataTop1}:${endColLetter}${dataBot1}`));
+          }
+          if (ranges.length === 0) {
+            console.warn("[시트탭로테이트] 고정헤더: 비울 데이터 구간 없음");
+          } else {
+            await sheets.spreadsheets.values.batchClear({
+              spreadsheetId,
+              requestBody: { ranges },
+            });
+            console.log("[시트탭로테이트] 복제 탭 데이터칸만 batchClear(헤더 유지):", ranges.length, "구간");
+          }
+        } else {
+          const clearRangeQuoted = makeQuotedSheetRange(finalTitle, `A1:${endColLetter}${clearBottom1}`);
+          await sheets.spreadsheets.values.clear({
+            spreadsheetId,
+            range: clearRangeQuoted,
+          });
+          console.log("[시트탭로테이트] 복제 탭 조율칸만 클리어(A~K, N~U 유지):", clearRangeQuoted);
+        }
       } catch (clearValErr) {
         console.warn(
-          "[시트탭로테이트] values.clear 실패, A~K grid만 비움:",
+          "[시트탭로테이트] values.clear/batchClear 실패, grid로 비움:",
           clearValErr?.message || clearValErr
         );
         const colCount = getScheduleGridColumnCount();
-        const blank = Array.from({ length: clearRows }, () => Array(colCount).fill(""));
-        await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, newSid, blank);
+        if (isLiveSyncFixedSheetHeadersEnabled()) {
+          for (let u = 0; ; u += 1) {
+            const dataTop1 = firstDataRow1 + u * br;
+            if (dataTop1 > clearBottom1) {
+              break;
+            }
+            const n = Math.min(tr, clearBottom1 - dataTop1 + 1);
+            const blank = Array.from({ length: n }, () => Array(colCount).fill(""));
+            await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, newSid, blank, dataTop1 - 1, 0);
+          }
+        } else {
+          const blank = Array.from({ length: clearRows }, () => Array(colCount).fill(""));
+          await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, newSid, blank);
+        }
       }
     }
   } catch (clearErr) {
@@ -1160,13 +1311,31 @@ async function syncSessionSummaryToLiveSheet(session) {
     return;
   }
 
-  const rows = buildSheetRowsForSession(session);
   const sheetTitle = getSheetTitleFromRange(liveRange, "Sheet1");
   const sheetId = await sheetsGetSheetIdByTitle(sheets, spreadsheetId, sheetTitle);
   if (sheetId === null || sheetId === undefined) {
     console.error("[실시간시트] 탭을 찾지 못함:", sheetTitle);
     return;
   }
+  if (isLiveSyncFixedSheetHeadersEnabled()) {
+    const groups = buildLiveSyncParticipantGroups(session);
+    const firstData1 = getLiveSyncDataStartRow1FromLiveRange(liveRange);
+    const br = getLiveSyncTemplateBlockRowCount();
+    console.log(
+      "[실시간시트] grid.update(고정헤더):",
+      sheetTitle,
+      `sheetId=${sheetId}`,
+      `참가자블록=${groups.length}`,
+      `첫데이터행(1-based)=${firstData1}`,
+      `블록행수=${br}`,
+      "startCol=A(고정)"
+    );
+    await sheetsWriteLiveSyncFixedParticipantBlocks(sheets, spreadsheetId, sheetId, groups, liveRange);
+    console.log("[실시간시트] 동기화 완료 (고정헤더·블록):", sheetTitle, groups.length);
+    return;
+  }
+
+  const rows = buildSheetRowsForSession(session);
   const startRowIndex0 = getLiveSyncDataStartRow1FromLiveRange(liveRange) - 1;
   const startColumnIndex0 = 0;
   console.log(
@@ -1866,10 +2035,10 @@ async function importLiveSheetToDiscordSessions(client) {
     Math.max(20, Number.parseInt(process.env.SCHEDULE_SHEET_IMPORT_MAX_ROWS ?? "300", 10) || 300),
     2000
   );
-  const readRangeQuoted = getLiveSyncValuesOnlyRange(liveRange, maxRows, "full");
+  const readRangeQuoted = getLiveSyncValuesOnlyRange(liveRange, maxRows, "full", { forImport: true });
   const sheetTitleForRead = getSheetTitleFromRange(liveRange, "Sheet1");
   const endColRead = a1IndexToColumnLetters(getScheduleGridColumnCount());
-  const topRow1Read = getLiveSyncDataStartRow1FromLiveRange(liveRange);
+  const topRow1Read = getLiveSyncReadTopRow1(liveRange);
   const readRangeUnquoted = `${sheetTitleForRead}!A${topRow1Read}:${endColRead}${topRow1Read + maxRows - 1}`;
 
   let values;
@@ -2447,6 +2616,9 @@ client.once(Events.ClientReady, async (readyClient) => {
   if (sheetId && liveEff) {
     const sampleTight = getLiveSyncValuesOnlyRange(liveEff, 6, "tight");
     const dataRow1 = getLiveSyncDataStartRow1FromLiveRange(liveEff);
+    const fixedHdr = isLiveSyncFixedSheetHeadersEnabled()
+      ? `고정헤더=1(첫데이터행=${dataRow1}, 블록=${getLiveSyncTemplateBlockRowCount()}행)`
+      : "고정헤더=0(첫 행부터 헤더+데이터 한 번에 씀)";
     console.log(
       "[실시간시트] 부팅 점검: 스프레드시트 연동됨 — LIVE(탭·범위)=",
       liveEff,
@@ -2454,7 +2626,9 @@ client.once(Events.ClientReady, async (readyClient) => {
       sampleTight,
       "| 조율표 데이터 시작 행(1-based, 항상 A열부터)=",
       dataRow1,
-      "(LIVE 왼쪽 위 행이 1이면 기본 9행. 1행부터 쓰려면 SCHEDULE_LIVE_SYNC_DATA_START_ROW=1)",
+      "|",
+      fixedHdr,
+      "(고정 헤더 쓰려면 SCHEDULE_LIVE_SYNC_FIXED_SHEET_HEADERS=1)",
       "| 상태파일:",
       getLiveSheetStatePath()
     );
