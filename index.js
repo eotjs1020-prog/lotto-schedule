@@ -710,6 +710,58 @@ function findSheetByTitleLoose(sheetsList, wantedTitle) {
   return list.find((s) => String(s.properties?.title || "").trim().toLowerCase() === low) || null;
 }
 
+function buildRowDataForUserEnteredGrid(rows2d) {
+  const colCount = getScheduleGridColumnCount();
+  return (rows2d || []).map((row) => ({
+    values: Array.from({ length: colCount }, (_, i) => ({
+      userEnteredValue: {
+        stringValue: String(row && row[i] !== undefined && row[i] !== null ? row[i] : ""),
+      },
+    })),
+  }));
+}
+
+async function sheetsGetSheetIdByTitle(sheets, spreadsheetId, sheetTitle) {
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets(properties(sheetId,title))",
+  });
+  const sh = findSheetByTitleLoose(meta.data.sheets || [], sheetTitle);
+  if (sh?.properties?.sheetId === undefined || sh?.properties?.sheetId === null) {
+    return null;
+  }
+  return sh.properties.sheetId;
+}
+
+/** `values.clear` / `values.update` 가 한글 탭 A1 문자열을 파싱 못 할 때 — `sheetId` + `updateCells` 로만 씀 */
+async function sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows2d) {
+  if (!rows2d || rows2d.length === 0) {
+    return;
+  }
+  const colCount = getScheduleGridColumnCount();
+  const rowData = buildRowDataForUserEnteredGrid(rows2d);
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateCells: {
+            range: {
+              sheetId,
+              startRowIndex: 0,
+              endRowIndex: rows2d.length,
+              startColumnIndex: 0,
+              endColumnIndex: colCount,
+            },
+            rows: rowData,
+            fields: "userEnteredValue",
+          },
+        },
+      ],
+    },
+  });
+}
+
 async function rotateLiveWorksheetAfterClose(session) {
   if (!isLiveSheetRotateOnCloseEnabled()) {
     return;
@@ -841,13 +893,21 @@ async function rotateLiveWorksheetAfterClose(session) {
       : Math.max(legacyClear, 500)
   );
   try {
-    const clearRange = getLiveSyncValuesOnlyRange(newRangeQuoted, clearRows);
-    await sheets.spreadsheets.values.clear({
+    const metaAfter = await sheets.spreadsheets.get({
       spreadsheetId,
-      range: clearRange,
+      fields: "sheets(properties(sheetId,title))",
     });
+    const newSh = findSheetByTitleLoose(metaAfter.data.sheets || [], finalTitle);
+    const newSid = newSh?.properties?.sheetId;
+    if (newSid === undefined || newSid === null) {
+      console.warn("[시트탭로테이트] 복제 탭 sheetId 조회 실패:", finalTitle);
+    } else {
+      const colCount = getScheduleGridColumnCount();
+      const blank = Array.from({ length: clearRows }, () => Array(colCount).fill(""));
+      await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, newSid, blank);
+    }
   } catch (clearErr) {
-    console.warn("[시트탭로테이트] 복제 탭 값 비우기(clear) 실패(다음 동기화에서 덮어씀):", clearErr?.message || clearErr);
+    console.warn("[시트탭로테이트] 복제 탭 값 비우기(grid) 실패(다음 동기화에서 덮어씀):", clearErr?.message || clearErr);
   }
 
   writeLiveSheetRangeOverride(newRangeQuoted);
@@ -1025,21 +1085,15 @@ async function syncSessionSummaryToLiveSheet(session) {
   }
 
   const rows = buildSheetRowsForSession(session);
-  const valuesRange = getLiveSyncValuesOnlyRange(liveRange, rows.length, "tight");
-  console.log("[실시간시트] clear/update:", valuesRange, `(rows=${rows.length})`);
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: valuesRange,
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: valuesRange,
-    valueInputOption: "RAW",
-    requestBody: {
-      values: rows,
-    },
-  });
-  console.log("[실시간시트] 동기화 완료:", valuesRange);
+  const sheetTitle = getSheetTitleFromRange(liveRange, "Sheet1");
+  const sheetId = await sheetsGetSheetIdByTitle(sheets, spreadsheetId, sheetTitle);
+  if (sheetId === null || sheetId === undefined) {
+    console.error("[실시간시트] 탭을 찾지 못함:", sheetTitle);
+    return;
+  }
+  console.log("[실시간시트] grid.update:", sheetTitle, `sheetId=${sheetId}`, `rows=${rows.length}`);
+  await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows);
+  console.log("[실시간시트] 동기화 완료 (grid):", sheetTitle, rows.length);
 }
 
 function scheduleLiveSheetSync(session) {
@@ -1727,20 +1781,32 @@ async function importLiveSheetToDiscordSessions(client) {
     Math.max(20, Number.parseInt(process.env.SCHEDULE_SHEET_IMPORT_MAX_ROWS ?? "300", 10) || 300),
     2000
   );
-  const readRange = getLiveSyncValuesOnlyRange(liveRange, maxRows);
+  const readRangeQuoted = getLiveSyncValuesOnlyRange(liveRange, maxRows, "full");
+  const sheetTitleForRead = getSheetTitleFromRange(liveRange, "Sheet1");
+  const endColRead = a1IndexToColumnLetters(getScheduleGridColumnCount());
+  const readRangeUnquoted = `${sheetTitleForRead}!A1:${endColRead}${maxRows}`;
 
   let values;
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: readRange,
+      range: readRangeQuoted,
       valueRenderOption: "FORMATTED_VALUE",
     });
     values = res.data.values;
   } catch (error) {
-    console.warn("[실시간시트→디스코드] 시트 읽기 실패:", error?.message || error);
-    out.parseError = "fetch_failed";
-    return out;
+    try {
+      const res2 = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: readRangeUnquoted,
+        valueRenderOption: "FORMATTED_VALUE",
+      });
+      values = res2.data.values;
+    } catch (e2) {
+      console.warn("[실시간시트→디스코드] 시트 읽기 실패:", error?.message || error, "| 재시도:", e2?.message || e2);
+      out.parseError = "fetch_failed";
+      return out;
+    }
   }
 
   const parsed = parseLiveSheetValuesToParticipants(values);
