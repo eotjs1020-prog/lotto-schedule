@@ -591,7 +591,7 @@ function parseA1Cell(ref) {
   return { col, colIndex, row };
 }
 
-/** 넓게 잡힌 LIVE_RANGE라도 조율판 열만 덮어써서 오른쪽 집계 영역은 clear/update 하지 않음. 시작 행·열은 LIVE 범위 **왼쪽 위 셀**(`A50:U100`이면 50행부터). */
+/** 실시간 조율 값은 항상 해당 탭 **A1**부터 11열(A~K)만 clear/update. LIVE 범위 문자열은 **탭 이름**과 아래쪽으로 비울 **행 한계**(예: `…!A1:U50`의 50행)만 참고 — 시작 열·행은 고정. */
 function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   const bang = liveRange.indexOf("!");
   const sheetPrefix = bang >= 0 ? liveRange.slice(0, bang + 1) : "Sheet1!";
@@ -602,12 +602,10 @@ function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   const rightRaw = (parts[1] || parts[0] || "A1").trim();
   const startParsed = parseA1Cell(leftRaw) || { col: "A", colIndex: 1, row: 1 };
   const endParsed = parseA1Cell(rightRaw) || startParsed;
-  const topRow = startParsed.row;
   const rowSpan = Math.max(1, Number(dataRowCount) || 1);
-  const bottomRow = Math.max(endParsed.row, startParsed.row, topRow + rowSpan - 1);
-  const endColIdx = startParsed.colIndex + getScheduleGridColumnCount() - 1;
-  const endCol = a1IndexToColumnLetters(endColIdx);
-  return `${sheetPrefix}${startParsed.col}${topRow}:${endCol}${bottomRow}`;
+  const bottomRow = Math.max(startParsed.row, endParsed.row, rowSpan);
+  const endCol = a1IndexToColumnLetters(getScheduleGridColumnCount());
+  return `${sheetPrefix}A1:${endCol}${bottomRow}`;
 }
 
 function getLiveSheetStatePath() {
