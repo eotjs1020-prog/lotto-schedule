@@ -726,6 +726,26 @@ function getA1SpanFromLiveRange(liveRange) {
   return rest.includes(":") ? rest : `${rest}:${rest}`;
 }
 
+/** 로테이트 후 복제 탭에서 M열 등 마스터 템플릿 잔상을 지울 때 `values.clear` 범위의 끝 열. */
+function getClearValuesEndColLetterFromA1Span(a1Span) {
+  const span = String(a1Span || "A1:K50").trim();
+  const [rawL, rawR] = span.includes(":") ? span.split(":").map((x) => x.trim()) : [span, span];
+  const p1 = parseA1Cell(rawL) || { colIndex: 1 };
+  const p2 = parseA1Cell(rawR) || p1;
+  const idx = Math.max(p1.colIndex, p2.colIndex, getScheduleGridColumnCount());
+  return a1IndexToColumnLetters(idx);
+}
+
+/** `values.clear` 하단 행(1-based): LIVE span 아래쪽과 `clearRows` 중 큰 값. */
+function getClearValuesBottomRow1FromA1Span(a1Span, minBottomRow1) {
+  const span = String(a1Span || "A1:K50").trim();
+  const [rawL, rawR] = span.includes(":") ? span.split(":").map((x) => x.trim()) : [span, span];
+  const p1 = parseA1Cell(rawL) || { row: 1 };
+  const p2 = parseA1Cell(rawR) || p1;
+  const spanBottom = Math.max(p1.row, p2.row);
+  return Math.max(1, spanBottom, Number(minBottomRow1) || 1);
+}
+
 function makeQuotedSheetRange(sheetTitle, a1Span) {
   const esc = String(sheetTitle).replace(/'/g, "''");
   return `'${esc}'!${a1Span}`;
@@ -951,9 +971,25 @@ async function rotateLiveWorksheetAfterClose(session) {
     if (newSid === undefined || newSid === null) {
       console.warn("[시트탭로테이트] 복제 탭 sheetId 조회 실패:", finalTitle);
     } else {
-      const colCount = getScheduleGridColumnCount();
-      const blank = Array.from({ length: clearRows }, () => Array(colCount).fill(""));
-      await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, newSid, blank);
+      const spanForClear = getA1SpanFromLiveRange(dupSourceRange);
+      const endColLetter = getClearValuesEndColLetterFromA1Span(spanForClear);
+      const clearBottom1 = Math.min(2000, getClearValuesBottomRow1FromA1Span(spanForClear, clearRows));
+      const clearRangeQuoted = makeQuotedSheetRange(finalTitle, `A1:${endColLetter}${clearBottom1}`);
+      try {
+        await sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: clearRangeQuoted,
+        });
+        console.log("[시트탭로테이트] 복제 탭 값 클리어(마스터 M열 등 포함):", clearRangeQuoted);
+      } catch (clearValErr) {
+        console.warn(
+          "[시트탭로테이트] values.clear 실패, A~K grid만 비움:",
+          clearValErr?.message || clearValErr
+        );
+        const colCount = getScheduleGridColumnCount();
+        const blank = Array.from({ length: clearRows }, () => Array(colCount).fill(""));
+        await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, newSid, blank);
+      }
     }
   } catch (clearErr) {
     console.warn("[시트탭로테이트] 복제 탭 값 비우기(grid) 실패(다음 동기화에서 덮어씀):", clearErr?.message || clearErr);
