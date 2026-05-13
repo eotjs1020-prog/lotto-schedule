@@ -1814,30 +1814,17 @@ function getMentionsForTime(session, time) {
 function buildDetailText(session) {
   const weekWednesdayIso = getBoardWeekWednesdayIsoFromSession(session);
   const orderedDays = getDaysInBoardWeekOrder();
-
-  function dayChip(day) {
-    const n = getMentionsForDay(session, day.key).length;
-    return `${formatDayAggregateHeadline(day, weekWednesdayIso)}(${n}명)`;
-  }
-
-  const rowTop = orderedDays.slice(0, 4).map(dayChip).join("  ");
-  const rowBot = orderedDays.slice(4, 7).map(dayChip).join("  ");
-
-  const lines = [
-    "**집계 요약** (수~화)",
-    "",
-    rowTop,
-    rowBot,
-    "",
-    "**시간대별** (멘션 없이 인원만)",
-    "",
-  ];
+  const lines = ["**마감 현황**", ""];
 
   for (const day of orderedDays) {
     const head = formatDayAggregateHeadline(day, weekWednesdayIso);
+    const n = getMentionsForDay(session, day.key).length;
     const slots = formatDayTimeSlotVotesHoriz(session, day.key);
-    lines.push(`· ${head}: ${slots}`);
+    lines.push(`· ${head}(${n}명): ${slots}`);
   }
+
+  lines.push("");
+  lines.push("자세한 내용은 시트 참고 부탁드립니다.");
 
   return lines.join("\n");
 }
@@ -1947,7 +1934,7 @@ function buildClosedSummaryEmbed(session, closedAtMs = Date.now()) {
     full = `${header}${body.slice(0, maxBody)}...`;
   }
   return new EmbedBuilder()
-    .setTitle("주간 조율 마감 — 집계")
+    .setTitle("주간 조율 마감")
     .setDescription(full)
     .setColor(0x57f287)
     .setFooter({ text: "마감되었습니다." });
