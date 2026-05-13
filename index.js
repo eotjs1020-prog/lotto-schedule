@@ -492,8 +492,9 @@ function getCountForTime(session, time) {
 function buildSheetRowsForSession(session) {
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
-  const startLabel = formatIsoYmdForBoard(voteStartIso);
-  const endLabel = formatIsoYmdForBoard(voteEndIso);
+  /** 시트·엑셀이 한글 날짜를 날짜 서식으로 잡아 `2024`만 보이는 경우 방지 — `coerceSheetDateCellToIsoYmd`와 호환 */
+  const startLabel = voteStartIso;
+  const endLabel = voteEndIso;
   const headerRow = ["참여자", "시작일", "마감일", "시간", ...DAYS.map((day) => `${day.label}요일`)];
 
   const rows = [];
@@ -590,7 +591,7 @@ function parseA1Cell(ref) {
   return { col, colIndex, row };
 }
 
-/** 넓게 잡힌 LIVE_RANGE라도 조율판 열만 덮어써서 오른쪽 집계 영역은 clear 하지 않음. 시작 행은 항상 1행 — LIVE에 `A50:U100`처럼 적혀 있어도 글이 50행부터 가지 않게 함(시작 열은 왼쪽 위 셀 그대로). */
+/** 넓게 잡힌 LIVE_RANGE라도 조율판 열만 덮어써서 오른쪽 집계 영역은 clear/update 하지 않음. 시작 행·열은 LIVE 범위 **왼쪽 위 셀**(`A50:U100`이면 50행부터). */
 function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   const bang = liveRange.indexOf("!");
   const sheetPrefix = bang >= 0 ? liveRange.slice(0, bang + 1) : "Sheet1!";
@@ -601,10 +602,12 @@ function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   const rightRaw = (parts[1] || parts[0] || "A1").trim();
   const startParsed = parseA1Cell(leftRaw) || { col: "A", colIndex: 1, row: 1 };
   const endParsed = parseA1Cell(rightRaw) || startParsed;
-  const bottomRow = Math.max(1, endParsed.row, startParsed.row, dataRowCount);
+  const topRow = startParsed.row;
+  const rowSpan = Math.max(1, Number(dataRowCount) || 1);
+  const bottomRow = Math.max(endParsed.row, startParsed.row, topRow + rowSpan - 1);
   const endColIdx = startParsed.colIndex + getScheduleGridColumnCount() - 1;
   const endCol = a1IndexToColumnLetters(endColIdx);
-  return `${sheetPrefix}${startParsed.col}1:${endCol}${bottomRow}`;
+  return `${sheetPrefix}${startParsed.col}${topRow}:${endCol}${bottomRow}`;
 }
 
 function getLiveSheetStatePath() {
