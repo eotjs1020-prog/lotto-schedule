@@ -648,6 +648,20 @@ function getEffectiveLiveRange() {
   return env && String(env).trim() ? String(env).trim() : null;
 }
 
+/**
+ * 마감 후 탭 복제 시 **원본으로 삼을 시트** 범위.
+ * `.env`의 `GOOGLE_SHEET_LIVE_RANGE`가 있으면 항상 그 탭(마스터·서식 템플릿)을 복제하고,
+ * 없을 때만 현재 effective(상태 파일 또는 env)를 씁니다.
+ * — 상태 JSON이 `조율_*`만 가리킬 때 복제 원본이 빈 탭이 되는 문제를 막습니다.
+ */
+function getLiveSheetDuplicateSourceRange() {
+  const env = process.env.GOOGLE_SHEET_LIVE_RANGE && String(process.env.GOOGLE_SHEET_LIVE_RANGE).trim();
+  if (env && env.includes("!")) {
+    return env;
+  }
+  return getEffectiveLiveRange();
+}
+
 function isLiveSheetRotateOnCloseEnabled() {
   const v = String(process.env.SCHEDULE_LIVE_SHEET_ROTATE_ON_CLOSE ?? "").trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";
@@ -692,11 +706,16 @@ async function rotateLiveWorksheetAfterClose(session) {
     console.warn("[시트탭로테이트] GOOGLE_SPREADSHEET_ID 또는 실시간 범위(.env 또는 상태 파일)가 없어 건너뜁니다.");
     return;
   }
+  const dupSourceRange = getLiveSheetDuplicateSourceRange();
+  if (!dupSourceRange) {
+    console.warn("[시트탭로테이트] 복제 원본 범위를 정하지 못했습니다.");
+    return;
+  }
   const sheets = await getSheetsClient();
   if (!sheets) {
     return;
   }
-  const a1Span = getA1SpanFromLiveRange(base);
+  const a1Span = getA1SpanFromLiveRange(dupSourceRange);
   const meta = await sheets.spreadsheets.get({
     spreadsheetId,
     fields: "sheets(properties(sheetId,title))",
@@ -714,7 +733,7 @@ async function rotateLiveWorksheetAfterClose(session) {
     newTitle = `${baseTitle}_${n}`.slice(0, 100);
   }
 
-  const sourceTitle = getSheetTitleFromRange(base, "Sheet1");
+  const sourceTitle = getSheetTitleFromRange(dupSourceRange, "Sheet1");
   const sourceSheet = findSheetByTitleLoose(sheetsList, sourceTitle);
   const sourceSheetId = sourceSheet?.properties?.sheetId;
   let finalTitle = newTitle;
@@ -814,7 +833,7 @@ async function rotateLiveWorksheetAfterClose(session) {
 
   writeLiveSheetRangeOverride(newRangeQuoted);
   console.log(
-    `[시트탭로테이트] 이전 탭 "${sourceTitle}" 복제 → "${finalTitle}" 내용 초기화 후 실시간 범위: ${newRangeQuoted} (상태: ${getLiveSheetStatePath()})`
+    `[시트탭로테이트] 복제 원본 "${sourceTitle}" → 새 탭 "${finalTitle}" 초기화 후 실시간 범위: ${newRangeQuoted} (상태: ${getLiveSheetStatePath()})`
   );
 }
 
