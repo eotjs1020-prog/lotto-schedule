@@ -831,6 +831,15 @@ function isLiveSheetRotateOnCloseEnabled() {
   return v === "1" || v === "true" || v === "yes";
 }
 
+/** `ROTATE_ON_CLOSE`가 켜져 있어도, 마감 시 **탭 복제·실시간 탭 전환**만 끄려면 `0`. (집계 append 등은 그대로) */
+function isLiveSheetRotateDuplicateSheetEnabled() {
+  const v = String(process.env.SCHEDULE_LIVE_SHEET_ROTATE_DUPLICATE_SHEET ?? "").trim().toLowerCase();
+  if (!v) {
+    return true;
+  }
+  return v !== "0" && v !== "false" && v !== "no" && v !== "off";
+}
+
 function getA1SpanFromLiveRange(liveRange) {
   const s = String(liveRange || "").trim();
   const b = s.indexOf("!");
@@ -981,6 +990,12 @@ async function sheetsWriteLiveSyncFixedParticipantBlocks(sheets, spreadsheetId, 
 
 async function rotateLiveWorksheetAfterClose(session) {
   if (!isLiveSheetRotateOnCloseEnabled()) {
+    return;
+  }
+  if (!isLiveSheetRotateDuplicateSheetEnabled()) {
+    console.log(
+      "[시트탭로테이트] 시트 복제·탭 전환 생략(SCHEDULE_LIVE_SHEET_ROTATE_DUPLICATE_SHEET=0) — GOOGLE_SHEET_LIVE_RANGE 탭·.schedule-live-sheet.json 은 그대로"
+    );
     return;
   }
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
