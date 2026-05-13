@@ -671,23 +671,52 @@ function getLiveSyncGridAnchorFromLiveRange(liveRange) {
   return parseA1Cell(leftRaw) || { col: "A", colIndex: 1, row: 1 };
 }
 
+let warnedLiveSyncDataStartRowClamp = false;
+
 /**
  * 조율 표가 들어갈 **첫 데이터 행(1-based)** (실시간 쓰기 기준).
- * - `SCHEDULE_LIVE_SYNC_FIXED_SHEET_HEADERS=1` 이면 시트에 헤더가 있으므로 `TEMPLATE_HEADER_ROW+1` (또는 `SCHEDULE_LIVE_SYNC_DATA_START_ROW`로 덮어씀).
- * - `SCHEDULE_LIVE_SYNC_DATA_START_ROW` 가 있으면 그대로.
- * - 없으면 LIVE 왼쪽 위 **행**: **1행이면 기본 9행** — 위 병합·타이틀(1~8) 템플릿.
+ * - `SCHEDULE_LIVE_SYNC_FIXED_SHEET_HEADERS=1` 이면 첫 데이터는 기본 `TEMPLATE_HEADER_ROW+1`. `DATA_START_ROW`가 헤더 행 이하이면 **헤더를 덮지 않도록** 올림.
+ * - 고정 헤더가 아니면 `DATA_START_ROW`가 있으면 그대로.
+ * - 없으면 LIVE 왼쪽 위 **행**: **1행이면 기본 9행**.
  */
 function getLiveSyncDataStartRow1FromLiveRange(liveRange) {
-  const ovr = process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW && String(process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW).trim();
-  if (ovr) {
-    const n = Number.parseInt(ovr, 10);
+  const headerRow1 = getLiveSyncTemplateHeaderRow1();
+  const ovrRaw = process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW && String(process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW).trim();
+  let fromOvr = null;
+  if (ovrRaw) {
+    const n = Number.parseInt(ovrRaw, 10);
     if (Number.isFinite(n) && n >= 1) {
-      return n;
+      fromOvr = n;
     }
   }
+
   if (isLiveSyncFixedSheetHeadersEnabled()) {
-    return getLiveSyncTemplateHeaderRow1() + 1;
+    const minimal = headerRow1 + 1;
+    if (fromOvr !== null && fromOvr <= headerRow1) {
+      if (!warnedLiveSyncDataStartRowClamp) {
+        warnedLiveSyncDataStartRowClamp = true;
+        console.warn(
+          "[실시간시트] SCHEDULE_LIVE_SYNC_DATA_START_ROW=",
+          fromOvr,
+          "은 고정 헤더 행(" + headerRow1 + ")과 겹칩니다. 서버 .env에서 삭제하거나",
+          minimal,
+          "이상으로 두세요. 지금은 행",
+          minimal,
+          "부터 씁니다."
+        );
+      }
+      return minimal;
+    }
+    if (fromOvr !== null) {
+      return fromOvr;
+    }
+    return minimal;
   }
+
+  if (fromOvr !== null) {
+    return fromOvr;
+  }
+
   const anchor = getLiveSyncGridAnchorFromLiveRange(liveRange);
   const r = Math.max(1, anchor.row);
   if (r === 1) {
@@ -2639,19 +2668,21 @@ client.once(Events.ClientReady, async (readyClient) => {
   if (sheetId && liveEff) {
     const sampleTight = getLiveSyncValuesOnlyRange(liveEff, 6, "tight");
     const dataRow1 = getLiveSyncDataStartRow1FromLiveRange(liveEff);
+    const readRow1 = getLiveSyncReadTopRow1(liveEff);
     const fixedHdr = isLiveSyncFixedSheetHeadersEnabled()
-      ? `고정헤더=1(첫데이터행=${dataRow1}, 블록=${getLiveSyncTemplateBlockRowCount()}행)`
+      ? `고정헤더=1(헤더행=${getLiveSyncTemplateHeaderRow1()}, 블록=${getLiveSyncTemplateBlockRowCount()}행, import시작행=${readRow1})`
       : "고정헤더=0(첫 행부터 헤더+데이터 한 번에 씀)";
     console.log(
       "[실시간시트] 부팅 점검: 스프레드시트 연동됨 — LIVE(탭·범위)=",
       liveEff,
       "| 버튼 누르면 clear/update 예:",
       sampleTight,
-      "| 조율표 데이터 시작 행(1-based, 항상 A열부터)=",
+      "| 첫 데이터 행(1-based, A열~)=",
       dataRow1,
       "|",
       fixedHdr,
-      "(고정 헤더 쓰려면 SCHEDULE_LIVE_SYNC_FIXED_SHEET_HEADERS=1)",
+      "| DATA_START_ROW(env)=",
+      String(process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW ?? "").trim() || "(없음)",
       "| 상태파일:",
       getLiveSheetStatePath()
     );
