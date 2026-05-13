@@ -804,7 +804,21 @@ function getA1SpanFromLiveRange(liveRange) {
   if (!rest) {
     return "A1:K50";
   }
-  return rest.includes(":") ? rest : `${rest}:${rest}`;
+  if (!rest.includes(":")) {
+    return `${rest}:${rest}`;
+  }
+  const parts = rest.split(":").map((x) => String(x || "").trim());
+  const p1 = parseA1Cell(parts[0] || "A1");
+  const p2 = parseA1Cell(parts[1] || parts[0] || "A1");
+  if (p1 && p2) {
+    return rest;
+  }
+  /** `A:Z` 같이 행 번호가 없으면 앵커·clear 계산이 깨짐 → A1…로 보정 */
+  const m1 = (parts[0] || "A").match(/^([A-Za-z]+)/);
+  const m2 = (parts[1] || "K").match(/^([A-Za-z]+)/);
+  const c1 = (m1 && m1[1] ? m1[1] : "A").toUpperCase();
+  const c2 = (m2 && m2[1] ? m2[1] : "K").toUpperCase();
+  return `${c1}1:${c2}500`;
 }
 
 /** 로테이트 직후 `values.clear` 세로 끝(1-based): LIVE span 아래쪽 행과 `clearRows` 중 큰 값. */
@@ -1329,7 +1343,12 @@ async function syncSessionSummaryToLiveSheet(session) {
       `블록행수=${br}`,
       "startCol=A(고정)"
     );
-    await sheetsWriteLiveSyncFixedParticipantBlocks(sheets, spreadsheetId, sheetId, groups, liveRange);
+    try {
+      await sheetsWriteLiveSyncFixedParticipantBlocks(sheets, spreadsheetId, sheetId, groups, liveRange);
+    } catch (e) {
+      console.error("[실시간시트] 고정헤더 batchUpdate 실패:", e?.message || e, e?.response?.data || "");
+      throw e;
+    }
     console.log("[실시간시트] 동기화 완료 (고정헤더·블록):", sheetTitle, groups.length);
     return;
   }
@@ -1345,7 +1364,12 @@ async function syncSessionSummaryToLiveSheet(session) {
     `startRowIndex0=${startRowIndex0}(행${startRowIndex0 + 1})`,
     "startCol=A(고정)"
   );
-  await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows, startRowIndex0, startColumnIndex0);
+  try {
+    await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows, startRowIndex0, startColumnIndex0);
+  } catch (e) {
+    console.error("[실시간시트] grid updateCells 실패:", e?.message || e, e?.response?.data || "");
+    throw e;
+  }
   console.log("[실시간시트] 동기화 완료 (grid):", sheetTitle, rows.length);
 }
 
