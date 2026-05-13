@@ -685,9 +685,10 @@ async function rotateLiveWorksheetAfterClose(session) {
   const a1Span = getA1SpanFromLiveRange(base);
   const meta = await sheets.spreadsheets.get({
     spreadsheetId,
-    fields: "sheets(properties(title))",
+    fields: "sheets(properties(sheetId,title))",
   });
-  const titles = new Set((meta.data.sheets || []).map((s) => s.properties?.title).filter(Boolean));
+  const sheetsList = meta.data.sheets || [];
+  const titles = new Set(sheetsList.map((s) => s.properties?.title).filter(Boolean));
   const src = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso } = getVoteWindowIsoForSession(src);
   const tag = String(voteStartIso || "주간").replace(/-/g, "");
@@ -698,24 +699,89 @@ async function rotateLiveWorksheetAfterClose(session) {
     n += 1;
     newTitle = `${baseTitle}_${n}`.slice(0, 100);
   }
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: {
-      requests: [
-        {
-          addSheet: {
-            properties: {
-              title: newTitle,
-              gridProperties: { rowCount: 200, columnCount: 30 },
+
+  const sourceTitle = getSheetTitleFromRange(base, "Sheet1");
+  const sourceSheet = sheetsList.find((s) => s.properties?.title === sourceTitle);
+  const sourceSheetId = sourceSheet?.properties?.sheetId;
+  let finalTitle = newTitle;
+
+  if (sourceSheetId !== undefined && sourceSheetId !== null) {
+    try {
+      const dupRes = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              duplicateSheet: {
+                sourceSheetId,
+                newSheetName: newTitle,
+              },
+            },
+          ],
+        },
+      });
+      const dupProps = dupRes.data?.replies?.[0]?.duplicateSheet?.properties;
+      if (dupProps && typeof dupProps.title === "string" && dupProps.title.trim()) {
+        finalTitle = dupProps.title.trim();
+      }
+    } catch (dupErr) {
+      console.warn("[시트탭로테이트] 시트 복제(duplicateSheet) 실패 — 빈 탭으로 대체:", dupErr?.message || dupErr);
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: newTitle,
+                  gridProperties: { rowCount: 200, columnCount: 30 },
+                },
+              },
+            },
+          ],
+        },
+      });
+      finalTitle = newTitle;
+    }
+  } else {
+    console.warn(`[시트탭로테이트] 소스 시트 "${sourceTitle}" 를 찾지 못해 빈 탭으로 만듭니다.`);
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: newTitle,
+                gridProperties: { rowCount: 200, columnCount: 30 },
+              },
             },
           },
-        },
-      ],
-    },
-  });
-  const newRange = makeQuotedSheetRange(newTitle, a1Span);
-  writeLiveSheetRangeOverride(newRange);
-  console.log(`[시트탭로테이트] 다음 /일정생성 실시간 시트: ${newRange} (상태: ${getLiveSheetStatePath()})`);
+        ],
+      },
+    });
+    finalTitle = newTitle;
+  }
+
+  const newRangeQuoted = makeQuotedSheetRange(finalTitle, a1Span);
+  const clearRows = Math.min(
+    2000,
+    Math.max(80, Number.parseInt(process.env.SCHEDULE_LIVE_SHEET_CLEAR_MAX_ROWS ?? "200", 10) || 200)
+  );
+  try {
+    const clearRange = getLiveSyncValuesOnlyRange(newRangeQuoted, clearRows);
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: clearRange,
+    });
+  } catch (clearErr) {
+    console.warn("[시트탭로테이트] 복제 탭 값 비우기(clear) 실패(다음 동기화에서 덮어씀):", clearErr?.message || clearErr);
+  }
+
+  writeLiveSheetRangeOverride(newRangeQuoted);
+  console.log(
+    `[시트탭로테이트] 이전 탭 "${sourceTitle}" 복제 → "${finalTitle}" 내용 초기화 후 실시간 범위: ${newRangeQuoted} (상태: ${getLiveSheetStatePath()})`
+  );
 }
 
 async function appendSessionSummaryToSheet(session, closedAtMs) {
