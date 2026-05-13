@@ -27,6 +27,13 @@ const DAYS = [
 ];
 const VALID_DAY_KEYS = new Set(DAYS.map((d) => d.key));
 
+/** 마감·조회 집계: 한 주를 수요일 → 다음 주 화요일 순으로 표시 */
+const BOARD_WEEK_DAY_KEYS = ["WED", "THU", "FRI", "SAT", "SUN", "MON", "TUE"];
+
+function getDaysInBoardWeekOrder() {
+  return BOARD_WEEK_DAY_KEYS.map((key) => DAYS.find((d) => d.key === key)).filter(Boolean);
+}
+
 /** 조율판 embed **안내** 블록 기본 문구 (`user-work-schedule.json` 의 `global.boardGuideText` 로 덮어쓸 수 있음) */
 const DEFAULT_BOARD_GUIDE = [
   "요일 버튼으로 먼저 대상 요일을 선택한 뒤, 시간 버튼으로 해당 요일 시간을 선택해 주세요. (복수 선택 가능)",
@@ -1806,24 +1813,30 @@ function getMentionsForTime(session, time) {
 
 function buildDetailText(session) {
   const weekWednesdayIso = getBoardWeekWednesdayIsoFromSession(session);
-  const lines = ["집계 현황표", "", "[요일별 시간표]"];
-  for (const day of DAYS) {
-    const mentions = getMentionsForDay(session, day.key);
-    lines.push(`- ${formatDayAggregateHeadline(day, weekWednesdayIso)} (${mentions.length}명)`);
-    lines.push(`  참가자: ${mentions.length > 0 ? mentions.join(", ") : "없음"}`);
-    for (const time of TIME_SLOTS) {
-      const dayTimeMentions = [];
-      for (const [userId, userData] of session.users.entries()) {
-        const times = userData.selectedDayTimes?.get(day.key);
-        if (times && times.has(time)) {
-          dayTimeMentions.push(`<@${userId}>`);
-        }
-      }
-      lines.push(
-        `  - ${time}: ${dayTimeMentions.length > 0 ? "O" : "X"} (${dayTimeMentions.length}명)`
-      );
-    }
-    lines.push("");
+  const orderedDays = getDaysInBoardWeekOrder();
+
+  function dayChip(day) {
+    const n = getMentionsForDay(session, day.key).length;
+    return `${formatDayAggregateHeadline(day, weekWednesdayIso)}(${n}명)`;
+  }
+
+  const rowTop = orderedDays.slice(0, 4).map(dayChip).join("  ");
+  const rowBot = orderedDays.slice(4, 7).map(dayChip).join("  ");
+
+  const lines = [
+    "**집계 요약** (수~화)",
+    "",
+    rowTop,
+    rowBot,
+    "",
+    "**시간대별** (멘션 없이 인원만)",
+    "",
+  ];
+
+  for (const day of orderedDays) {
+    const head = formatDayAggregateHeadline(day, weekWednesdayIso);
+    const slots = formatDayTimeSlotVotesHoriz(session, day.key);
+    lines.push(`· ${head}: ${slots}`);
   }
 
   return lines.join("\n");
@@ -1845,8 +1858,8 @@ function formatDayTimeSlotVotesHoriz(session, dayKey) {
 
 function buildViewCountText(session) {
   const weekWednesdayIso = getBoardWeekWednesdayIsoFromSession(session);
-  const lines = ["집계 현황표", "", "[요일별 투표 인원]"];
-  for (const day of DAYS) {
+  const lines = ["집계 현황표", "", "[요일별 투표 인원 · 수~화 순]"];
+  for (const day of getDaysInBoardWeekOrder()) {
     const dayCount = getMentionsForDay(session, day.key).length;
     lines.push(
       `- ${formatDayAggregateHeadline(day, weekWednesdayIso)}: ${dayCount}명\n${formatDayTimeSlotVotesHoriz(session, day.key)}`
