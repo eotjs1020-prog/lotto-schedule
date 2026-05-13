@@ -2290,6 +2290,24 @@ const client = new Client({
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`${readyClient.user.tag} 로그인 완료`);
   console.log("[봇이 읽은 index.js]", path.resolve(__dirname, "index.js"));
+  const sheetId = process.env.GOOGLE_SPREADSHEET_ID && String(process.env.GOOGLE_SPREADSHEET_ID).trim();
+  const liveEff = getEffectiveLiveRange();
+  if (sheetId && liveEff) {
+    const sampleTight = getLiveSyncValuesOnlyRange(liveEff, 6, "tight");
+    console.log(
+      "[실시간시트] 부팅 점검: 스프레드시트 연동됨 — LIVE(탭·범위)=",
+      liveEff,
+      "| 버튼 누르면 clear/update 예:",
+      sampleTight,
+      "| 상태파일:",
+      getLiveSheetStatePath()
+    );
+  } else {
+    console.warn(
+      "[실시간시트] 부팅 점검: 시트 동기화 비활성 — GOOGLE_SPREADSHEET_ID 또는 LIVE 범위(.env / .schedule-live-sheet.json)를 확인하세요.",
+      { hasSpreadsheetId: Boolean(sheetId), liveRange: liveEff || null }
+    );
+  }
   loadUserWorkScheduleMap();
   const globalDates = getEnvGlobalWorkDateSet();
   if (globalDates) {
