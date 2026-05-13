@@ -1745,6 +1745,10 @@ async function resolveDiscordUserDisplayLabel(fetchClient, userId) {
         }
       }
       if (m) {
+        const nick = typeof m.nickname === "string" ? m.nickname.trim() : "";
+        if (nick) {
+          return nick;
+        }
         if (typeof m.displayName === "string" && m.displayName.trim()) {
           return m.displayName.trim();
         }
