@@ -592,7 +592,9 @@ function parseA1Cell(ref) {
 }
 
 /**
- * 조율 표가 들어갈 **첫 행(1-based)**. 위쪽이 병합·타이틀이면 `.env`의 `GOOGLE_SHEET_LIVE_RANGE`를 `…!A9:U50`처럼 왼쪽 위를 표 영역으로 두거나, `SCHEDULE_LIVE_SYNC_DATA_START_ROW=9` 로 고정.
+ * 조율 표가 들어갈 **첫 행(1-based)**.
+ * - `SCHEDULE_LIVE_SYNC_DATA_START_ROW` 가 있으면 그대로(1이면 진짜 1행부터).
+ * - 없으면 `GOOGLE_SHEET_LIVE_RANGE`(또는 effective) 왼쪽 위 행을 쓰는데, **1행(A1)이면 기본 9행** — 위쪽 병합·타이틀(1~8) 쓰는 템플릿이 많아서. 1행부터 쓰려면 `SCHEDULE_LIVE_SYNC_DATA_START_ROW=1`.
  */
 function getLiveSyncDataStartRow1FromLiveRange(liveRange) {
   const ovr = process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW && String(process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW).trim();
@@ -607,7 +609,11 @@ function getLiveSyncDataStartRow1FromLiveRange(liveRange) {
   const span = a1Part.includes(":") ? a1Part : `${a1Part}:${a1Part}`;
   const leftRaw = (span.split(":")[0] || "A1").trim();
   const startParsed = parseA1Cell(leftRaw) || { row: 1 };
-  return Math.max(1, startParsed.row);
+  const r = Math.max(1, startParsed.row);
+  if (r === 1) {
+    return 9;
+  }
+  return r;
 }
 
 /** 실시간 조율 값은 해당 탭 **A열**부터 11열. 세로는 `getLiveSyncDataStartRow1FromLiveRange` 기준. */
@@ -2399,7 +2405,7 @@ client.once(Events.ClientReady, async (readyClient) => {
       sampleTight,
       "| 조율표 데이터 시작 행(1-based)=",
       dataRow1,
-      "(위가 병합·타이틀이면 .env를 …!A9:U50 처럼 또는 SCHEDULE_LIVE_SYNC_DATA_START_ROW=9)",
+      "(LIVE가 …!A1… 이면 기본 9행부터 씀. 1행부터면 SCHEDULE_LIVE_SYNC_DATA_START_ROW=1)",
       "| 상태파일:",
       getLiveSheetStatePath()
     );
