@@ -1024,6 +1024,7 @@ async function syncSessionSummaryToLiveSheet(session) {
 
   const rows = buildSheetRowsForSession(session);
   const valuesRange = getLiveSyncValuesOnlyRange(liveRange, rows.length);
+  console.log("[실시간시트] clear/update:", valuesRange, `(rows=${rows.length})`);
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
     range: valuesRange,
