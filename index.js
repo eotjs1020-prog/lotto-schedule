@@ -640,12 +640,23 @@ function writeLiveSheetRangeOverride(liveRange) {
 }
 
 function getEffectiveLiveRange() {
+  const env = process.env.GOOGLE_SHEET_LIVE_RANGE && String(process.env.GOOGLE_SHEET_LIVE_RANGE).trim();
   const fromFile = readLiveSheetRangeOverride();
+
+  /** 상태 JSON은 “어느 탭에 쓸지”만 기억하고, A1·행 개수 등은 .env LIVE와 맞춤(예전에 A40으로 저장돼 영원히 밀리는 문제 방지). */
+  if (fromFile && env && env.includes("!")) {
+    const stateTitle = getSheetTitleFromRange(fromFile, "").trim();
+    if (stateTitle) {
+      const span = getA1SpanFromLiveRange(env);
+      return makeQuotedSheetRange(stateTitle, span);
+    }
+  }
+
   if (fromFile) {
     return fromFile;
   }
-  const env = process.env.GOOGLE_SHEET_LIVE_RANGE;
-  return env && String(env).trim() ? String(env).trim() : null;
+
+  return env || null;
 }
 
 /**
