@@ -591,8 +591,8 @@ function parseA1Cell(ref) {
   return { col, colIndex, row };
 }
 
-/** 실시간 조율 값은 항상 해당 탭 **A1**부터 11열(A~K)만 clear/update. LIVE 범위 문자열은 **탭 이름**과 아래쪽으로 비울 **행 한계**(예: `…!A1:U50`의 50행)만 참고 — 시작 열·행은 고정. */
-function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
+/** 실시간 조율 값은 항상 해당 탭 **A1**부터 11열(A~K). `verticalMode`: `"tight"` = 이번에 쓸 행 수만(동기화 실패 시 빈 칸 대재난 방지), `"full"` = `.env` 범위 아래까지(가져오기·로테이트 후 비우기). */
+function getLiveSyncValuesOnlyRange(liveRange, dataRowCount, verticalMode = "full") {
   const bang = liveRange.indexOf("!");
   const a1Part = (bang >= 0 ? liveRange.slice(bang + 1) : liveRange).trim();
   const span = a1Part.includes(":") ? a1Part : `${a1Part}:${a1Part}`;
@@ -602,10 +602,11 @@ function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   const startParsed = parseA1Cell(leftRaw) || { col: "A", colIndex: 1, row: 1 };
   const endParsed = parseA1Cell(rightRaw) || startParsed;
   const rowSpan = Math.max(1, Number(dataRowCount) || 1);
-  const bottomRow = Math.max(startParsed.row, endParsed.row, rowSpan);
+  const envBottom = Math.max(startParsed.row, endParsed.row);
+  const bottomRow =
+    verticalMode === "tight" ? Math.max(1, rowSpan) : Math.max(envBottom, rowSpan);
   const endCol = a1IndexToColumnLetters(getScheduleGridColumnCount());
   const sheetTitle = getSheetTitleFromRange(liveRange, "Sheet1");
-  /** 한글·밑줄 탭 이름은 `'탭'!A1:K50` 형태가 아니면 Sheets API가 range 파싱 실패 */
   return makeQuotedSheetRange(sheetTitle, `A1:${endCol}${bottomRow}`);
 }
 
@@ -1024,7 +1025,7 @@ async function syncSessionSummaryToLiveSheet(session) {
   }
 
   const rows = buildSheetRowsForSession(session);
-  const valuesRange = getLiveSyncValuesOnlyRange(liveRange, rows.length);
+  const valuesRange = getLiveSyncValuesOnlyRange(liveRange, rows.length, "tight");
   console.log("[실시간시트] clear/update:", valuesRange, `(rows=${rows.length})`);
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
@@ -1038,7 +1039,7 @@ async function syncSessionSummaryToLiveSheet(session) {
       values: rows,
     },
   });
-}
+  console.log("[실시간시트] 동기화 완료:", valuesRange);
 
 function scheduleLiveSheetSync(session) {
   const sessionId = session.id;
