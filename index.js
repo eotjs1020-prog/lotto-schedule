@@ -594,7 +594,6 @@ function parseA1Cell(ref) {
 /** 실시간 조율 값은 항상 해당 탭 **A1**부터 11열(A~K)만 clear/update. LIVE 범위 문자열은 **탭 이름**과 아래쪽으로 비울 **행 한계**(예: `…!A1:U50`의 50행)만 참고 — 시작 열·행은 고정. */
 function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   const bang = liveRange.indexOf("!");
-  const sheetPrefix = bang >= 0 ? liveRange.slice(0, bang + 1) : "Sheet1!";
   const a1Part = (bang >= 0 ? liveRange.slice(bang + 1) : liveRange).trim();
   const span = a1Part.includes(":") ? a1Part : `${a1Part}:${a1Part}`;
   const parts = span.split(":");
@@ -605,7 +604,9 @@ function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   const rowSpan = Math.max(1, Number(dataRowCount) || 1);
   const bottomRow = Math.max(startParsed.row, endParsed.row, rowSpan);
   const endCol = a1IndexToColumnLetters(getScheduleGridColumnCount());
-  return `${sheetPrefix}A1:${endCol}${bottomRow}`;
+  const sheetTitle = getSheetTitleFromRange(liveRange, "Sheet1");
+  /** 한글·밑줄 탭 이름은 `'탭'!A1:K50` 형태가 아니면 Sheets API가 range 파싱 실패 */
+  return makeQuotedSheetRange(sheetTitle, `A1:${endCol}${bottomRow}`);
 }
 
 function getLiveSheetStatePath() {
