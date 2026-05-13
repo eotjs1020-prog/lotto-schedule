@@ -492,9 +492,8 @@ function getCountForTime(session, time) {
 function buildSheetRowsForSession(session) {
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
-  /** 시트·엑셀이 한글 날짜를 날짜 서식으로 잡아 `2024`만 보이는 경우 방지 — `coerceSheetDateCellToIsoYmd`와 호환 */
-  const startLabel = voteStartIso;
-  const endLabel = voteEndIso;
+  const startLabel = formatIsoYmdForBoard(voteStartIso);
+  const endLabel = formatIsoYmdForBoard(voteEndIso);
   const headerRow = ["참여자", "시작일", "마감일", "시간", ...DAYS.map((day) => `${day.label}요일`)];
 
   const rows = [];
@@ -539,8 +538,8 @@ function buildSheetRowsForSession(session) {
 function buildLiveSyncParticipantGroups(session) {
   const sourceSession = session.createdAt ? session : { ...session, createdAt: Date.now() };
   const { voteStartIso, voteEndIso } = getVoteWindowIsoForSession(sourceSession);
-  const startLabel = voteStartIso;
-  const endLabel = voteEndIso;
+  const startLabel = formatIsoYmdForBoard(voteStartIso);
+  const endLabel = formatIsoYmdForBoard(voteEndIso);
   /** @type {string[][][]} */
   const groups = [];
 
