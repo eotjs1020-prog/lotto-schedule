@@ -511,7 +511,15 @@ function buildSheetRowsForSession(session) {
   }
 
   if (session.users.size === 0) {
-    rows.push(["참여자 없음", startLabel, endLabel, "", ...DAYS.map(() => "X")]);
+    TIME_SLOTS.forEach((time, timeIndex) => {
+      rows.push([
+        timeIndex === 0 ? "참여자 없음" : "",
+        timeIndex === 0 ? startLabel : "",
+        timeIndex === 0 ? endLabel : "",
+        time,
+        ...DAYS.map(() => "X"),
+      ]);
+    });
   }
   return rows;
 }
