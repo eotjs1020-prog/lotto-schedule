@@ -1,0 +1,16 @@
+---
+description: After code changes in this repo, commit and push without asking the user.
+alwaysApply: true
+---
+
+# Git: commit and push (no prompt)
+
+When you finish meaningful edits to this project (anything the user would `git pull` on the server for):
+
+1. Stage the changed files that belong to the task (do not add secrets, `.env`, or unrelated local-only files unless the user explicitly asked).
+2. Commit with a short, clear message in Korean or English.
+3. Run `git push` to `origin` on the current branch (usually `main`).
+
+Do **not** ask "should I push?" or tell the user to push themselves unless `git push` fails (e.g. auth/network) — then report the error and what they need to fix.
+
+If there is nothing to commit, skip.
