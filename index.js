@@ -591,7 +591,26 @@ function parseA1Cell(ref) {
   return { col, colIndex, row };
 }
 
-/** 실시간 조율 값은 항상 해당 탭 **A1**부터 11열(A~K). `verticalMode`: `"tight"` = 이번에 쓸 행 수만(동기화 실패 시 빈 칸 대재난 방지), `"full"` = `.env` 범위 아래까지(가져오기·로테이트 후 비우기). */
+/**
+ * 조율 표가 들어갈 **첫 행(1-based)**. 위쪽이 병합·타이틀이면 `.env`의 `GOOGLE_SHEET_LIVE_RANGE`를 `…!A9:U50`처럼 왼쪽 위를 표 영역으로 두거나, `SCHEDULE_LIVE_SYNC_DATA_START_ROW=9` 로 고정.
+ */
+function getLiveSyncDataStartRow1FromLiveRange(liveRange) {
+  const ovr = process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW && String(process.env.SCHEDULE_LIVE_SYNC_DATA_START_ROW).trim();
+  if (ovr) {
+    const n = Number.parseInt(ovr, 10);
+    if (Number.isFinite(n) && n >= 1) {
+      return n;
+    }
+  }
+  const bang = liveRange.indexOf("!");
+  const a1Part = (bang >= 0 ? liveRange.slice(bang + 1) : liveRange).trim();
+  const span = a1Part.includes(":") ? a1Part : `${a1Part}:${a1Part}`;
+  const leftRaw = (span.split(":")[0] || "A1").trim();
+  const startParsed = parseA1Cell(leftRaw) || { row: 1 };
+  return Math.max(1, startParsed.row);
+}
+
+/** 실시간 조율 값은 해당 탭 **A열**부터 11열. 세로는 `getLiveSyncDataStartRow1FromLiveRange` 기준. */
 function getLiveSyncValuesOnlyRange(liveRange, dataRowCount, verticalMode = "full") {
   const bang = liveRange.indexOf("!");
   const a1Part = (bang >= 0 ? liveRange.slice(bang + 1) : liveRange).trim();
@@ -603,11 +622,14 @@ function getLiveSyncValuesOnlyRange(liveRange, dataRowCount, verticalMode = "ful
   const endParsed = parseA1Cell(rightRaw) || startParsed;
   const rowSpan = Math.max(1, Number(dataRowCount) || 1);
   const envBottom = Math.max(startParsed.row, endParsed.row);
+  const topRow1 = getLiveSyncDataStartRow1FromLiveRange(liveRange);
   const bottomRow =
-    verticalMode === "tight" ? Math.max(1, rowSpan) : Math.max(envBottom, rowSpan);
+    verticalMode === "tight"
+      ? topRow1 + rowSpan - 1
+      : Math.max(envBottom, topRow1 + rowSpan - 1);
   const endCol = a1IndexToColumnLetters(getScheduleGridColumnCount());
   const sheetTitle = getSheetTitleFromRange(liveRange, "Sheet1");
-  return makeQuotedSheetRange(sheetTitle, `A1:${endCol}${bottomRow}`);
+  return makeQuotedSheetRange(sheetTitle, `A${topRow1}:${endCol}${bottomRow}`);
 }
 
 function getLiveSheetStatePath() {
@@ -733,13 +755,14 @@ async function sheetsGetSheetIdByTitle(sheets, spreadsheetId, sheetTitle) {
   return sh.properties.sheetId;
 }
 
-/** `values.clear` / `values.update` 가 한글 탭 A1 문자열을 파싱 못 할 때 — `sheetId` + `updateCells` 로만 씀 */
-async function sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows2d) {
+/** `values.clear` / `values.update` 가 한글 탭 A1 문자열을 파싱 못 할 때 — `sheetId` + `updateCells` 로만 씀. `startRowIndex0` = 데이터 블록 첫 행(0-based). */
+async function sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows2d, startRowIndex0 = 0) {
   if (!rows2d || rows2d.length === 0) {
     return;
   }
   const colCount = getScheduleGridColumnCount();
   const rowData = buildRowDataForUserEnteredGrid(rows2d);
+  const start = Math.max(0, Number(startRowIndex0) || 0);
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
@@ -748,8 +771,8 @@ async function sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheet
           updateCells: {
             range: {
               sheetId,
-              startRowIndex: 0,
-              endRowIndex: rows2d.length,
+              startRowIndex: start,
+              endRowIndex: start + rows2d.length,
               startColumnIndex: 0,
               endColumnIndex: colCount,
             },
@@ -1091,8 +1114,15 @@ async function syncSessionSummaryToLiveSheet(session) {
     console.error("[실시간시트] 탭을 찾지 못함:", sheetTitle);
     return;
   }
-  console.log("[실시간시트] grid.update:", sheetTitle, `sheetId=${sheetId}`, `rows=${rows.length}`);
-  await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows);
+  const startRowIndex0 = getLiveSyncDataStartRow1FromLiveRange(liveRange) - 1;
+  console.log(
+    "[실시간시트] grid.update:",
+    sheetTitle,
+    `sheetId=${sheetId}`,
+    `rows=${rows.length}`,
+    `startRowIndex0=${startRowIndex0}(표시행=${startRowIndex0 + 1})`
+  );
+  await sheetsOverwriteUserEnteredGridFromA1(sheets, spreadsheetId, sheetId, rows, startRowIndex0);
   console.log("[실시간시트] 동기화 완료 (grid):", sheetTitle, rows.length);
 }
 
@@ -1784,7 +1814,8 @@ async function importLiveSheetToDiscordSessions(client) {
   const readRangeQuoted = getLiveSyncValuesOnlyRange(liveRange, maxRows, "full");
   const sheetTitleForRead = getSheetTitleFromRange(liveRange, "Sheet1");
   const endColRead = a1IndexToColumnLetters(getScheduleGridColumnCount());
-  const readRangeUnquoted = `${sheetTitleForRead}!A1:${endColRead}${maxRows}`;
+  const topRow1Read = getLiveSyncDataStartRow1FromLiveRange(liveRange);
+  const readRangeUnquoted = `${sheetTitleForRead}!A${topRow1Read}:${endColRead}${topRow1Read + maxRows - 1}`;
 
   let values;
   try {
@@ -2360,11 +2391,15 @@ client.once(Events.ClientReady, async (readyClient) => {
   const liveEff = getEffectiveLiveRange();
   if (sheetId && liveEff) {
     const sampleTight = getLiveSyncValuesOnlyRange(liveEff, 6, "tight");
+    const dataRow1 = getLiveSyncDataStartRow1FromLiveRange(liveEff);
     console.log(
       "[실시간시트] 부팅 점검: 스프레드시트 연동됨 — LIVE(탭·범위)=",
       liveEff,
       "| 버튼 누르면 clear/update 예:",
       sampleTight,
+      "| 조율표 데이터 시작 행(1-based)=",
+      dataRow1,
+      "(위가 병합·타이틀이면 .env를 …!A9:U50 처럼 또는 SCHEDULE_LIVE_SYNC_DATA_START_ROW=9)",
       "| 상태파일:",
       getLiveSheetStatePath()
     );
