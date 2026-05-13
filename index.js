@@ -828,9 +828,14 @@ async function rotateLiveWorksheetAfterClose(session) {
   }
 
   const newRangeQuoted = makeQuotedSheetRange(finalTitle, a1Span);
+  /** 마스터 복제본에 예전 참가자 블록이 50행 아래까지 남는 문제: 마감 직후 clear는 최소 500행(또는 ROTATE 전용 env). */
+  const legacyClear = Math.max(1, Number.parseInt(process.env.SCHEDULE_LIVE_SHEET_CLEAR_MAX_ROWS ?? "50", 10) || 50);
+  const rotateExplicit = Number.parseInt(String(process.env.SCHEDULE_LIVE_SHEET_ROTATE_CLEAR_MAX_ROWS ?? "").trim(), 10);
   const clearRows = Math.min(
     2000,
-    Math.max(1, Number.parseInt(process.env.SCHEDULE_LIVE_SHEET_CLEAR_MAX_ROWS ?? "50", 10) || 50)
+    Number.isFinite(rotateExplicit) && rotateExplicit > 0
+      ? rotateExplicit
+      : Math.max(legacyClear, 500)
   );
   try {
     const clearRange = getLiveSyncValuesOnlyRange(newRangeQuoted, clearRows);
