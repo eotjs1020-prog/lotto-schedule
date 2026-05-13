@@ -853,7 +853,30 @@ async function rotateLiveWorksheetAfterClose(session) {
   );
 }
 
-async function appendSessionSummaryToSheet(session, closedAtMs) {
+/**
+ * 마감 집계가 붙을 시트 범위(기본 규칙).
+ * - `GOOGLE_SHEET_APPEND_RANGE` 가 있으면 그대로(고정 아카이브 탭 등).
+ * - 아니면 **실시간 조율이 쓰는 탭**(`getEffectiveLiveRange`의 탭 이름 + `!A:Z`) — `GOOGLE_SHEET_RANGE`와 다를 때 마스터 맨 아래에 쌓이던 문제를 막음.
+ * - 실시간 범위가 없을 때만 `GOOGLE_SHEET_RANGE`.
+ *
+ * 마감 시에는 로테이트 전에 이 값을 한 번 구해 두었다가(`appendRangeFrozen`) 탭 전환 후에도 **같은 문자열**로 append 해야, 집계가 방금 마감한 주의 `조율_*` 탭 하단에 붙음.
+ */
+function resolveDefaultAppendSpreadsheetRange() {
+  const custom = process.env.GOOGLE_SHEET_APPEND_RANGE && String(process.env.GOOGLE_SHEET_APPEND_RANGE).trim();
+  if (custom) {
+    return custom;
+  }
+  const live = getEffectiveLiveRange();
+  if (live && live.includes("!")) {
+    const title = getSheetTitleFromRange(live, "Sheet1");
+    const esc = String(title).replace(/'/g, "''");
+    return `'${esc}'!A:Z`;
+  }
+  return process.env.GOOGLE_SHEET_RANGE || "Sheet1!A:Z";
+}
+
+/** @param {string | undefined} appendRangeFrozen 마감 처리 중 로테이트 전에 `resolveDefaultAppendSpreadsheetRange()` 로 고정한 범위 */
+async function appendSessionSummaryToSheet(session, closedAtMs, appendRangeFrozen) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) {
     return;
@@ -864,7 +887,11 @@ async function appendSessionSummaryToSheet(session, closedAtMs) {
     return;
   }
 
-  const range = process.env.GOOGLE_SHEET_RANGE || "Sheet1!A:Z";
+  const range =
+    appendRangeFrozen !== undefined && appendRangeFrozen !== null && String(appendRangeFrozen).trim()
+      ? String(appendRangeFrozen).trim()
+      : resolveDefaultAppendSpreadsheetRange();
+  console.log("[시트 마감 집계] append 범위:", range);
   const sheetTitle = getSheetTitleFromRange(range, "Sheet1");
   const rows = buildSheetRowsForSession(session);
 
@@ -888,7 +915,7 @@ async function appendSessionSummaryToSheet(session, closedAtMs) {
     spreadsheetId,
     fields: "sheets(properties(sheetId,title),conditionalFormats)",
   });
-  const targetSheet = (meta.data.sheets || []).find((s) => s.properties?.title === sheetTitle);
+  const targetSheet = findSheetByTitleLoose(meta.data.sheets || [], sheetTitle);
   const sheetId = targetSheet?.properties?.sheetId;
   if (sheetId === undefined) {
     return;
@@ -1843,15 +1870,17 @@ async function closeSessionAndPublishSummary(client, session, logPrefix = "[마�
       clearTimeout(pendingTimer);
       liveSyncTimers.delete(sessionId);
     }
-    try {
-      await appendSessionSummaryToSheet(session, Date.now());
-    } catch (sheetError) {
-      console.error(`${logPrefix} Google Sheets 기록 실패:`, sheetError);
-    }
+    /** 로테이트로 `getEffectiveLiveRange()`가 바뀌기 전에, 집계를 붙일 탭을 고정 */
+    const appendRangeFrozen = resolveDefaultAppendSpreadsheetRange();
     try {
       await rotateLiveWorksheetAfterClose(session);
     } catch (rotErr) {
       console.error(`${logPrefix} 실시간 시트 탭 전환 실패:`, rotErr);
+    }
+    try {
+      await appendSessionSummaryToSheet(session, Date.now(), appendRangeFrozen);
+    } catch (sheetError) {
+      console.error(`${logPrefix} Google Sheets 기록 실패:`, sheetError);
     }
     sessions.delete(sessionId);
     if (weeklyAutoSession?.sessionId === sessionId) {
