@@ -65,6 +65,11 @@ let guildMemberLabelIndexCache = { map: null, atMs: 0 };
 const GUILD_MEMBER_LABEL_INDEX_TTL_MS = 60_000;
 
 const SCHEDULE_TZ = "Asia/Seoul";
+/** 조율판 버튼 클릭마다 `console.log`. 서버 로그가 시끄러우면 `SCHEDULE_LOG_BUTTON_INTERACTIONS=0` */
+function isScheduleButtonInteractionLogEnabled() {
+  const v = String(process.env.SCHEDULE_LOG_BUTTON_INTERACTIONS ?? "1").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "no" && v !== "off";
+}
 /** @type {{ sessionId: string; channelId: string; messageId: string } | null} */
 let weeklyAutoSession = null;
 let sheetsClient = null;
@@ -2930,6 +2935,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isButton()) {
+    if (isScheduleButtonInteractionLogEnabled()) {
+      const uid = interaction.user?.id ?? "?";
+      const tag = interaction.user?.tag ?? String(uid);
+      console.log(
+        "[조율버튼]",
+        new Date().toLocaleString("ko-KR", { timeZone: SCHEDULE_TZ }),
+        `user=${tag}(${uid})`,
+        `guild=${interaction.guildId ?? "-"}`,
+        `ch=${interaction.channelId ?? "-"}`,
+        `customId=${interaction.customId}`
+      );
+    }
     const [type, sessionId, ...payloadParts] = interaction.customId.split(":");
     const payload = payloadParts.join(":");
     const session = sessions.get(sessionId);
