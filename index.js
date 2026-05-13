@@ -726,17 +726,7 @@ function getA1SpanFromLiveRange(liveRange) {
   return rest.includes(":") ? rest : `${rest}:${rest}`;
 }
 
-/** 로테이트 후 복제 탭에서 M열 등 마스터 템플릿 잔상을 지울 때 `values.clear` 범위의 끝 열. */
-function getClearValuesEndColLetterFromA1Span(a1Span) {
-  const span = String(a1Span || "A1:K50").trim();
-  const [rawL, rawR] = span.includes(":") ? span.split(":").map((x) => x.trim()) : [span, span];
-  const p1 = parseA1Cell(rawL) || { colIndex: 1 };
-  const p2 = parseA1Cell(rawR) || p1;
-  const idx = Math.max(p1.colIndex, p2.colIndex, getScheduleGridColumnCount());
-  return a1IndexToColumnLetters(idx);
-}
-
-/** `values.clear` 하단 행(1-based): LIVE span 아래쪽과 `clearRows` 중 큰 값. */
+/** 로테이트 직후 `values.clear` 세로 끝(1-based): LIVE span 아래쪽 행과 `clearRows` 중 큰 값. */
 function getClearValuesBottomRow1FromA1Span(a1Span, minBottomRow1) {
   const span = String(a1Span || "A1:K50").trim();
   const [rawL, rawR] = span.includes(":") ? span.split(":").map((x) => x.trim()) : [span, span];
@@ -972,7 +962,8 @@ async function rotateLiveWorksheetAfterClose(session) {
       console.warn("[시트탭로테이트] 복제 탭 sheetId 조회 실패:", finalTitle);
     } else {
       const spanForClear = getA1SpanFromLiveRange(dupSourceRange);
-      const endColLetter = getClearValuesEndColLetterFromA1Span(spanForClear);
+      /** LIVE가 `…!A1:U50`처럼 넓어도 조율 블록은 A~K만 비움. N~U 등 오른쪽 사용자 영역은 건드리지 않음. */
+      const endColLetter = a1IndexToColumnLetters(getScheduleGridColumnCount());
       const clearBottom1 = Math.min(2000, getClearValuesBottomRow1FromA1Span(spanForClear, clearRows));
       const clearRangeQuoted = makeQuotedSheetRange(finalTitle, `A1:${endColLetter}${clearBottom1}`);
       try {
@@ -980,7 +971,7 @@ async function rotateLiveWorksheetAfterClose(session) {
           spreadsheetId,
           range: clearRangeQuoted,
         });
-        console.log("[시트탭로테이트] 복제 탭 값 클리어(마스터 M열 등 포함):", clearRangeQuoted);
+        console.log("[시트탭로테이트] 복제 탭 조율칸만 클리어(A~K, N~U 유지):", clearRangeQuoted);
       } catch (clearValErr) {
         console.warn(
           "[시트탭로테이트] values.clear 실패, A~K grid만 비움:",
