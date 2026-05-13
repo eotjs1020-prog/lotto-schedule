@@ -1718,6 +1718,60 @@ function getOrCreateUserData(session, userId, username) {
   return userData;
 }
 
+/** `SCHEDULE_SESSION_SEED_USER_ID` — 조율판 생성 직후 시트에 `참여자 없음` 대신 넣을 총관리자(또는 대표) 유저 ID */
+function getScheduleSessionSeedUserId() {
+  const raw = process.env.SCHEDULE_SESSION_SEED_USER_ID;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  const t = String(raw).trim();
+  if (!/^\d{17,20}$/.test(t)) {
+    return null;
+  }
+  return t;
+}
+
+async function resolveDiscordUserDisplayLabel(fetchClient, userId) {
+  const gid = process.env.GUILD_ID ? String(process.env.GUILD_ID).trim() : "";
+  if (gid && fetchClient.isReady()) {
+    const g = fetchClient.guilds.cache.get(gid);
+    if (g) {
+      let m = g.members.cache.get(userId);
+      if (!m) {
+        try {
+          m = await g.members.fetch(userId);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (m) {
+        if (typeof m.displayName === "string" && m.displayName.trim()) {
+          return m.displayName.trim();
+        }
+        return m.user?.globalName || m.user?.username || userId;
+      }
+    }
+  }
+  try {
+    const u = await fetchClient.users.fetch(userId);
+    return u.globalName || u.username || userId;
+  } catch {
+    return userId;
+  }
+}
+
+/**
+ * 새 세션에 시트용 첫 줄을 채우기 위해, 지정된 유저를 투표 0인 상태로 한 명 넣습니다.
+ */
+async function ensureSessionSeedParticipant(fetchClient, session) {
+  const seedId = getScheduleSessionSeedUserId();
+  if (!seedId || session.users.has(seedId)) {
+    return;
+  }
+  const label = await resolveDiscordUserDisplayLabel(fetchClient, seedId);
+  getOrCreateUserData(session, seedId, label);
+}
+
 function getMentionsForDay(session, dayKey) {
   const mentions = [];
   for (const [userId, userData] of session.users.entries()) {
@@ -2033,6 +2087,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const { sessionId, session } = registerSession(interaction.user.id, interaction.channelId, {
           priorWeekVoteWindow,
         });
+
+        await ensureSessionSeedParticipant(interaction.client, session);
 
         const embed = buildSummaryEmbed(session);
         const message = await interaction.editReply({
@@ -2546,6 +2602,7 @@ async function dashboardControlPostBoard(channelId, mode, referenceWednesdayIso)
     opts.createdAtMs = createdAtMs;
   }
   const { sessionId, session } = registerSession(client.user.id, v.channel.id, opts);
+  await ensureSessionSeedParticipant(client, session);
   const message = await v.channel.send({
     embeds: [buildSummaryEmbed(session)],
     components: buildComponents(sessionId, session),
