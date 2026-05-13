@@ -367,7 +367,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName("시트불러오기")
     .setDescription(
-      "실시간 Google 시트(GOOGLE_SHEET_LIVE_RANGE)를 읽어 같은 투표 주간의 조율판 임베드를 갱신합니다."
+      "실시간 Google 시트(`.env`의 GOOGLE_SHEET_LIVE_RANGE 또는 마감 후 저장된 탭 범위)를 읽어 같은 투표 주간의 조율판 임베드를 갱신합니다."
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
@@ -607,6 +607,117 @@ function getLiveSyncValuesOnlyRange(liveRange, dataRowCount) {
   return `${sheetPrefix}${start.col}${start.row}:${endCol}${rows}`;
 }
 
+function getLiveSheetStatePath() {
+  const raw = process.env.SCHEDULE_LIVE_SHEET_STATE_PATH;
+  if (raw && String(raw).trim()) {
+    const t = String(raw).trim();
+    return path.isAbsolute(t) ? t : path.join(__dirname, t);
+  }
+  return path.join(__dirname, ".schedule-live-sheet.json");
+}
+
+function readLiveSheetRangeOverride() {
+  try {
+    const p = getLiveSheetStatePath();
+    if (!fs.existsSync(p)) {
+      return null;
+    }
+    const j = JSON.parse(fs.readFileSync(p, "utf8"));
+    const r = j && typeof j.liveRange === "string" ? j.liveRange.trim() : "";
+    if (!r || !r.includes("!")) {
+      return null;
+    }
+    return r;
+  } catch {
+    return null;
+  }
+}
+
+function writeLiveSheetRangeOverride(liveRange) {
+  const p = getLiveSheetStatePath();
+  const payload = JSON.stringify({ liveRange: String(liveRange).trim(), updatedAtMs: Date.now() }, null, 0);
+  fs.writeFileSync(p, payload, "utf8");
+}
+
+function getEffectiveLiveRange() {
+  const fromFile = readLiveSheetRangeOverride();
+  if (fromFile) {
+    return fromFile;
+  }
+  const env = process.env.GOOGLE_SHEET_LIVE_RANGE;
+  return env && String(env).trim() ? String(env).trim() : null;
+}
+
+function isLiveSheetRotateOnCloseEnabled() {
+  const v = String(process.env.SCHEDULE_LIVE_SHEET_ROTATE_ON_CLOSE ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+function getA1SpanFromLiveRange(liveRange) {
+  const s = String(liveRange || "").trim();
+  const b = s.indexOf("!");
+  const rest = b >= 0 ? s.slice(b + 1).trim() : s;
+  if (!rest) {
+    return "A1:K50";
+  }
+  return rest.includes(":") ? rest : `${rest}:${rest}`;
+}
+
+function makeQuotedSheetRange(sheetTitle, a1Span) {
+  const esc = String(sheetTitle).replace(/'/g, "''");
+  return `'${esc}'!${a1Span}`;
+}
+
+async function rotateLiveWorksheetAfterClose(session) {
+  if (!isLiveSheetRotateOnCloseEnabled()) {
+    return;
+  }
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const base = getEffectiveLiveRange();
+  if (!spreadsheetId || !base) {
+    console.warn("[시트탭로테이트] GOOGLE_SPREADSHEET_ID 또는 실시간 범위(.env 또는 상태 파일)가 없어 건너뜁니다.");
+    return;
+  }
+  const sheets = await getSheetsClient();
+  if (!sheets) {
+    return;
+  }
+  const a1Span = getA1SpanFromLiveRange(base);
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets(properties(title))",
+  });
+  const titles = new Set((meta.data.sheets || []).map((s) => s.properties?.title).filter(Boolean));
+  const src = session.createdAt ? session : { ...session, createdAt: Date.now() };
+  const { voteStartIso } = getVoteWindowIsoForSession(src);
+  const tag = String(voteStartIso || "주간").replace(/-/g, "");
+  let baseTitle = `조율_${tag}`.replace(/[\[\]\*\?\/\\]/g, "_").slice(0, 90);
+  let newTitle = baseTitle;
+  let n = 0;
+  while (titles.has(newTitle)) {
+    n += 1;
+    newTitle = `${baseTitle}_${n}`.slice(0, 100);
+  }
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          addSheet: {
+            properties: {
+              title: newTitle,
+              gridProperties: { rowCount: 200, columnCount: 30 },
+            },
+          },
+        },
+      ],
+    },
+  });
+  const newRange = makeQuotedSheetRange(newTitle, a1Span);
+  writeLiveSheetRangeOverride(newRange);
+  console.log(`[시트탭로테이트] 다음 /일정생성 실시간 시트: ${newRange} (상태: ${getLiveSheetStatePath()})`);
+}
+
 async function appendSessionSummaryToSheet(session, closedAtMs) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) {
@@ -738,7 +849,7 @@ async function appendSessionSummaryToSheet(session, closedAtMs) {
 
 async function syncSessionSummaryToLiveSheet(session) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  const liveRange = process.env.GOOGLE_SHEET_LIVE_RANGE;
+  const liveRange = getEffectiveLiveRange();
   if (!spreadsheetId || !liveRange) {
     return;
   }
@@ -1426,12 +1537,12 @@ function applyParsedLiveSheetToSession(session, parsed, memberLabelIndex) {
 }
 
 /**
- * GOOGLE_SHEET_LIVE_RANGE 시트를 읽어, 투표 주간이 일치하는 활성 세션의 임베드·버튼을 갱신합니다.
+ * 실시간 시트 범위(`getEffectiveLiveRange`)를 읽어, 투표 주간이 일치하는 활성 세션의 임베드·버튼을 갱신합니다.
  * @returns {{ matched: number; edited: number; parseError?: string; noEditDetail?: { changed: boolean; blockCount: number; resolvedBlockCount: number; unresolvedNames: string[]; explicitEmpty: boolean } }}
  */
 async function importLiveSheetToDiscordSessions(client) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  const liveRange = process.env.GOOGLE_SHEET_LIVE_RANGE;
+  const liveRange = getEffectiveLiveRange();
   const out = { matched: 0, edited: 0, parseError: undefined, noEditDetail: null };
 
   if (!spreadsheetId || !liveRange) {
@@ -1601,6 +1712,11 @@ async function closeSessionAndPublishSummary(client, session, logPrefix = "[마�
       await appendSessionSummaryToSheet(session, Date.now());
     } catch (sheetError) {
       console.error(`${logPrefix} Google Sheets 기록 실패:`, sheetError);
+    }
+    try {
+      await rotateLiveWorksheetAfterClose(session);
+    } catch (rotErr) {
+      console.error(`${logPrefix} 실시간 시트 탭 전환 실패:`, rotErr);
     }
     sessions.delete(sessionId);
     if (weeklyAutoSession?.sessionId === sessionId) {
@@ -2053,7 +2169,7 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   const sheetImportSec = Number.parseInt(process.env.SCHEDULE_SHEET_IMPORT_INTERVAL_SEC ?? "0", 10);
   if (Number.isFinite(sheetImportSec) && sheetImportSec > 0) {
-    if (process.env.GOOGLE_SPREADSHEET_ID && process.env.GOOGLE_SHEET_LIVE_RANGE) {
+    if (process.env.GOOGLE_SPREADSHEET_ID && getEffectiveLiveRange()) {
       setInterval(() => {
         importLiveSheetToDiscordSessions(readyClient).catch((e) => {
           console.warn("[실시간시트→디스코드] 폴링 오류:", e?.message || e);
@@ -2188,7 +2304,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const r = await importLiveSheetToDiscordSessions(client);
         let text;
         if (r.parseError === "no_sheet_config") {
-          text = "GOOGLE_SPREADSHEET_ID 또는 GOOGLE_SHEET_LIVE_RANGE 가 없어 시트를 읽을 수 없어요.";
+          text =
+            "GOOGLE_SPREADSHEET_ID가 없거나, 실시간 시트 범위가 없어요. `.env`의 `GOOGLE_SHEET_LIVE_RANGE`를 넣거나, 마감 로테이트 후 생성된 `.schedule-live-sheet.json`이 있는지 확인해 주세요.";
         } else if (r.parseError === "no_sheets_client") {
           text = "Google 서비스 계정(GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY)이 없어요.";
         } else if (r.parseError === "fetch_failed") {
@@ -2529,7 +2646,7 @@ function getDashboardSnapshot() {
     features: {
       scheduleCron: false,
       scheduleChannelId: process.env.SCHEDULE_CHANNEL_ID ? String(process.env.SCHEDULE_CHANNEL_ID).trim() : "",
-      sheetsLive: Boolean(process.env.GOOGLE_SPREADSHEET_ID && process.env.GOOGLE_SHEET_LIVE_RANGE),
+      sheetsLive: Boolean(process.env.GOOGLE_SPREADSHEET_ID && getEffectiveLiveRange()),
       guildSlash: Boolean(process.env.GUILD_ID),
     },
     scheduleFile: getDashboardScheduleFileForSnapshot(),
